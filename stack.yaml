@@ -9,6 +9,7 @@ packages:
 system-ghc: true
 install-ghc: false
 compiler-check: match-exact
+notify-if-nix-on-path: false
 
 # Enter flake.nix/shell.nix explicitly instead of nesting Stack's Nix shell.
 nix:
