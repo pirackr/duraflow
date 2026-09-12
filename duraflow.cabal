@@ -1,0 +1,33 @@
+cabal-version:      3.0
+name:               duraflow
+version:            0.1.0.0
+synopsis:           Durable local workflows
+category:           System
+description:        Haskell project scaffold for a local durable workflow runner.
+license:            NONE
+build-type:         Simple
+extra-source-files: README.md
+
+common defaults
+  default-language: GHC2021
+  ghc-options:      -Wall -Wcompat
+  build-depends:    base >=4.18 && <5
+
+library
+  import:           defaults
+  hs-source-dirs:   src
+  exposed-modules:  Duraflow
+
+executable duraflow
+  import:           defaults
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  ghc-options:      -threaded -rtsopts
+  build-depends:    duraflow
+
+test-suite duraflow-test
+  import:           defaults
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  build-depends:    duraflow

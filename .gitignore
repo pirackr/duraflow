@@ -1,2 +1,18 @@
 .pi
 .lean-ctx.toml
+
+# Haskell build artifacts and local Cabal overrides
+/dist-newstyle/
+/dist/
+/.stack-work/
+cabal.project.local
+cabal.project.local~
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+
+# Nix development/build artifacts
+/.direnv/
+/result
+/result-*
