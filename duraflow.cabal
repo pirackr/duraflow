@@ -3,7 +3,7 @@ name:               duraflow
 version:            0.1.0.0
 synopsis:           Durable local workflows
 category:           System
-description:        Haskell project scaffold for a local durable workflow runner.
+description:        Minimal durable subprocess workflows with a JSON-lines client protocol.
 license:            NONE
 build-type:         Simple
 extra-source-files: README.md
@@ -17,6 +17,18 @@ library
   import:           defaults
   hs-source-dirs:   src
   exposed-modules:  Duraflow
+  other-modules:    Duraflow.Store
+  build-depends:
+      aeson
+    , bytestring
+    , containers
+    , directory
+    , filelock
+    , filepath
+    , process
+    , text
+    , time
+    , unix
 
 executable duraflow
   import:           defaults

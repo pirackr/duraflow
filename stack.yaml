@@ -1,6 +1,5 @@
-# Compiler-only resolver: the scaffold currently depends only on base.
-# Keep this compiler aligned with the GHC supplied by flake.lock.
-resolver: ghc-9.10.3
+# This snapshot uses GHC 9.10.3, matching the flake's toolchain.
+resolver: lts-24.15
 
 packages:
   - .

@@ -16,3 +16,8 @@ cabal.project.local~
 /.direnv/
 /result
 /result-*
+
+# Local workflow state and Python bytecode
+/.duraflow/
+__pycache__/
+*.py[cod]

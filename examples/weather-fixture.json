@@ -1,0 +1,10 @@
+{
+  "location": "San Francisco, CA",
+  "timezone": "America/Los_Angeles",
+  "fixture": {
+    "temperature_min_f": 52,
+    "temperature_max_f": 61,
+    "rain_probability_percent": 80,
+    "wind_max_mph": 18
+  }
+}
