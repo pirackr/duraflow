@@ -19,12 +19,14 @@ library
   exposed-modules:
       Duraflow
   other-modules:
-      Duraflow.Internal.Snapshot
+      Duraflow.Internal.Runtime
+    , Duraflow.Internal.Snapshot
     , Duraflow.Internal.Storage
     , Duraflow.Internal.Types
   build-depends:
       aeson      ^>=2.2.5.1
     , bytestring ^>=0.12.2.0
+    , deepseq    ^>=1.5.0.0
     , directory  ^>=1.3.8.5
     , filepath   ^>=1.5.4.0
     , filelock   ^>=0.1.1.9
@@ -37,18 +39,24 @@ test-suite duraflow-test
   hs-source-dirs:   test, src
   main-is:          Main.hs
   other-modules:
-      Duraflow.Internal.Snapshot
+      Duraflow
+    , Duraflow.Internal.Runtime
+    , Duraflow.Internal.Snapshot
     , Duraflow.Internal.Storage
     , Duraflow.Internal.Types
+    , ProcessTests
+    , RuntimeTests
     , SnapshotTests
     , StorageTests
     , TestSupport
   build-depends:
       aeson      ^>=2.2.5.1
     , bytestring ^>=0.12.2.0
+    , deepseq    ^>=1.5.0.0
     , directory  ^>=1.3.8.5
     , duraflow
     , filepath   ^>=1.5.4.0
     , filelock   ^>=0.1.1.9
+    , process    ^>=1.6.26.1
     , text       ^>=2.1.3
     , unix       ^>=2.8.7.0
