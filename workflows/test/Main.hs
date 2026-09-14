@@ -146,6 +146,17 @@ structuralFailures = do
         , ("nonzero UTC offset", replace "\"utc_offset_seconds\": 0" "\"utc_offset_seconds\": 3600" bytes)
         ]
   forM_ failures $ \(label, body) -> assertLeft label (parseForecast request (forecastUrl request) timestamp body)
+  let allEmpty =
+        replace "[2.0, 3.2]" "[]"
+          . replace "[12.4, 41.0]" "[]"
+          . replace "[20, 60]" "[]"
+          . replace "[18.7, 17.5]" "[]"
+          . replace "[11.2, 5.0]" "[]"
+          . replace "[\"2026-09-14\", \"2026-09-15\"]" "[]"
+          $ bytes
+  assertEqual "all empty daily arrays diagnostic"
+    (Left "Error in $: daily arrays must have equal nonzero lengths")
+    (parseForecast request (forecastUrl request) timestamp allEmpty)
 
 unitFailures :: IO ()
 unitFailures = do
@@ -194,6 +205,18 @@ validationRules = do
     (validate "weather" [(True, "ignored")])
   assertEqual "failed rules preserve order" (Left ["first", "third"])
     (validate () [(False, "first"), (True, "second"), (False, "third")])
+  let coordinateBoundaries =
+        [ ("latitude -90", -90, 0)
+        , ("latitude 90", 90, 0)
+        , ("longitude -180", 0, -180)
+        , ("longitude 180", 0, 180)
+        ]
+  forM_ coordinateBoundaries $ \(label, latitude, longitude) ->
+    assertEqual (label <> " is accepted") (Right ())
+      (validateCoordinates "boundary" latitude longitude)
+  forM_ [0, 100] $ \rain ->
+    assertBool ("rain " <> show rain <> " is accepted") $
+      not (isLeft (validateDailyRow (DailyMetrics (TemperatureRange 10 10) rain 0 0)))
   assertBool "equal temperatures are accepted" $
     not (isLeft (validateDailyRow (DailyMetrics (TemperatureRange 10 10) 0 0 0)))
   assertEqual "direct nonfinite metrics are rejected without dependent diagnostics"

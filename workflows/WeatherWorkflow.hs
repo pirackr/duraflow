@@ -386,13 +386,13 @@ normalizeInvocation (state, execution, request) = do
 parseCoordinate :: Text -> Double -> Double -> String -> Either Text Double
 parseCoordinate label lower upper input = case readMaybe input of
     Nothing -> Left (label <> " must be a number")
-    Just value -> firstValidationError $ validate value
+    Just value -> joinValidationErrors $ validate value
         [ (finite value, label <> " must be finite")
         , (not (finite value) || value >= lower && value <= upper, label <> " is outside its geographic range")
         ]
 
-firstValidationError :: Either [Text] value -> Either Text value
-firstValidationError = either (Left . Text.intercalate "\n") Right
+joinValidationErrors :: Either [Text] value -> Either Text value
+joinValidationErrors = either (Left . Text.intercalate "\n") Right
 parseDate :: String -> Either Text Day
 parseDate input = case parseTimeM True defaultTimeLocale "%F" input of
     Nothing -> Left "forecast date must be a valid YYYY-MM-DD calendar date"
