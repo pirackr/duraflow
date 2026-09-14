@@ -43,7 +43,7 @@
 - Produces: the same library and test component in the nested package. No executable component and no new Haskell API.
 - Root `stack build`, `stack test`, and `stack ghci duraflow:lib` retain their workspace roles.
 
-- [ ] **Step 1: Verify the structural expectation fails before the move.**
+- [x] **Step 1: Verify the structural expectation fails before the move.**
 
 Run the following assertion before editing. It must fail because the new core package does not exist yet.
 
@@ -56,7 +56,7 @@ PY
 
 Record the original library, test, and sketch hashes for exact move verification. Capture the existing staged entries and the root `.gitignore` content hash. Never use `git add .`, `git commit -a`, broad cleanup, or resets.
 
-- [ ] **Step 2: Move sources and remove the unused executable.**
+- [x] **Step 2: Move sources and remove the unused executable.**
 
 ```sh
 mkdir -p duraflow-core/src duraflow-core/test workflows
@@ -109,7 +109,7 @@ Create `duraflow-core/.gitignore` with exactly these package-local artifact patt
 /dist-newstyle/
 ```
 
-- [ ] **Step 3: Keep the root workspace and CI working.**
+- [x] **Step 3: Keep the root workspace and CI working.**
 
 In `stack.yaml`, change only the package list from `- .` to `- duraflow-core`. Preserve the resolver, compiler matching, and Nix settings.
 
@@ -124,7 +124,7 @@ In `.github/workflows/ci.yml`, retain the existing root cache paths and add the 
 
 Keep all action pins, cache key expressions, permissions, and root build/test commands unchanged.
 
-- [ ] **Step 4: Explain the separation without claiming runtime implementation.**
+- [x] **Step 4: Explain the separation without claiming runtime implementation.**
 
 Create `duraflow-core/README.md`:
 
@@ -173,7 +173,7 @@ fourmolu --mode inplace duraflow-core/src/Duraflow.hs duraflow-core/test/Main.hs
 
 Explain that future loop, ticket, or orchestrator components can become sibling packages, but none are created now. Link the two new directory READMEs. Remove instructions referring to the deleted executable or old root source paths.
 
-- [ ] **Step 5: Verify the structural split and source preservation.**
+- [x] **Step 5: Verify the structural split and source preservation.**
 
 Run this structural check. It must now pass.
 
@@ -200,7 +200,7 @@ PY
 
 Compare the sketch hash to its recorded original. Check that nested artifacts are ignored using `git check-ignore duraflow-core/.stack-work/example`. Verify that the staged entries present before implementation are unchanged and that the root ignore-file hash is unchanged.
 
-- [ ] **Step 6: Build, test, and verify source packaging.**
+- [x] **Step 6: Build, test, and verify source packaging.**
 
 ```sh
 nix develop path:. --command stack build --test --no-run-tests
@@ -212,11 +212,19 @@ git diff --check
 
 Expect a successful library/test build and the existing test suite to pass. Inspect the generated source archive to verify that it contains `duraflow.cabal`, `README.md`, `src/Duraflow.hs`, and `test/Main.hs`, but no app executable or weather sketch. Document pre-existing Cabal metadata warnings rather than expanding this structural change into licensing or packaging policy work.
 
-- [ ] **Step 7: Commit only the intended paths and report.**
+- [x] **Step 7: Commit only the intended paths and report.**
 
 Stage only the files listed in this task, including the old tracked paths being removed. Use a conventional commit such as `refactor: separate core library from workflow examples`. Because unrelated changes are already staged, commit with an explicit path list using `git commit --only`. Do not commit the user's files, even though they are in the index.
 
 Record the commit, exact validation commands, results, source preservation checks, and any limitations in the task report. Run independent spec and quality review before delivery.
+
+## Execution record
+
+Task 1 was implemented in commit `e00eba1` and passed independent spec and quality review. Structural checks, the pinned Stack build and test suite, Fourmolu, and whitespace checks passed. `stack ghci duraflow:lib` loaded the relocated module and exited successfully. The original library, test, and weather sketch contents were preserved. Original staged index entries and the root ignore file were independently checked and remain unchanged.
+
+`stack sdist` produced the correct archive, including the package README, Cabal file, library source, and test source, and excluding application files. The command returned exit 1 because the unchanged package metadata has `license: NONE`; it also warned that no maintainer is set. This is not a successful metadata validation or a publishable package. Choosing a license or maintainer is outside this structural change.
+
+The existing test suite is still a placeholder. No runtime or runnable weather application was implemented.
 
 ## Delivery after task review
 
