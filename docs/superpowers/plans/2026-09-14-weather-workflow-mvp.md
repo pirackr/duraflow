@@ -52,6 +52,7 @@ Execute Tasks 1 through 5 sequentially. Each has a fresh implementer, recorded R
 | `duraflow-core/test/RuntimeTests.hs`, `ProcessTests.hs` | Replay, failure, cancellation, lock contention and kill/restart tests |
 | `workflows/Weather.hs` | Public application facade and three-task orchestration |
 | `workflows/Weather/Types.hs`, `Forecast.hs`, `Advice.hs`, `Output.hs`, `Cli.hs` | Focused application types, HTTP validation, pure rendering, durable writer, argument/path handling |
+| `workflows/Weather/Cli/Internal.hs` | Testable application error boundary preserving all asynchronous cancellations |
 | `workflows/WeatherWorkflow.example.hs` | Runnable thin Main script, stderr failures and stdout success path |
 | `workflows/test/Main.hs`, `TestSupport.hs`, `ForecastTests.hs`, `AdviceTests.hs`, `IntegrationTests.hs`, `CliTests.hs` | Separate offline application tests |
 | `workflows/test/fixtures/forecast.json`, `checklist.txt` | Valid provider response and exact rendering golden fixture |
@@ -67,7 +68,7 @@ Internal modules stay Cabal `other-modules`, not exposed library API. The core t
 
 **Interfaces:** Produces a verified exact-GHC project build and package environment for all later tasks. Core consumes only `base`, `aeson`, `bytestring`, `text`, `directory`, `filepath`, `filelock`, `unix`; weather additionally consumes `http-client`, `http-client-tls`, `time`. Test-only dependencies may include `process` for handshake helpers; do not introduce a weather dependency into the core library.
 
-- [ ] Step 1. Record baseline compiler and empty suite behavior.
+- [x] Step 1. Record baseline compiler and empty suite behavior.
 
 ```sh
 nix develop --no-write-lock-file --command ghc --numeric-version
@@ -76,7 +77,7 @@ nix develop --no-write-lock-file --command stack test
 
 Expected compiler is exactly `9.10.3`; current placeholder suite passes. Select `lts-24.59`, whose snapshot SHA256 is `0f728e30e843d7f00460ad56858b995a3b227fca683659c7df9f2fc3988a3ce1` and size is `732465` bytes. Preserve all existing `system-ghc`, `install-ghc`, `compiler-check`, and `nix.enable` settings.
 
-- [ ] Step 2. Set `resolver: lts-24.59`, pinning that content hash in generated `stack.yaml.lock`. Add the core dependency family to the library and internal test suite with compatible bounds selected from that snapshot. All required packages are in this snapshot, so no extra dependencies are necessary. Do not change `flake.lock`. If native zlib discovery fails, add pinned Nix zlib to the shared development shell and export `EXTRA_INCLUDE_DIRS` and `EXTRA_LIB_DIRS` or a verified equivalent consumed by Stack, rather than introducing host-system search paths.
+- [x] Step 2. Set `resolver: lts-24.59`, pinning that content hash in generated `stack.yaml.lock`. Add the core dependency family to the library and internal test suite with compatible bounds selected from that snapshot. All required packages are in this snapshot, so no extra dependencies are necessary. Do not change `flake.lock`. If native zlib discovery fails, add pinned Nix zlib to the shared development shell and export `EXTRA_INCLUDE_DIRS` and `EXTRA_LIB_DIRS` or a verified equivalent consumed by Stack, rather than introducing host-system search paths.
 
 ```yaml
 system-ghc: true
@@ -87,7 +88,7 @@ nix:
   enable: false
 ```
 
-- [ ] Step 3. Validate dependency resolution before writing runtime code. Build the local core and the application packages, then load all required modules in a temporary smoke script.
+- [x] Step 3. Validate dependency resolution before writing runtime code. Build the local core and the application packages, then load all required modules in a temporary smoke script.
 
 ```sh
 nix develop --no-write-lock-file --command stack build --test --no-run-tests
@@ -97,7 +98,7 @@ nix develop --no-write-lock-file --command stack runghc --package duraflow --pac
 
 The smoke script imports `Duraflow`, `Data.Aeson`, `System.FileLock`, `System.Posix.Unistd`, `Network.HTTP.Client`, `Network.HTTP.Client.TLS`, and `Data.Time`, with `main = putStrLn "dependency closure loaded"`. The expected output is exactly that line. Store exact successful commands and selected versions in the task report. Verify commands without manual native include/library flags after adjusting the Nix shell, so CI and user commands use the same working environment.
 
-- [ ] Step 4. Commit only dependency configuration and the finalized plan dependency details.
+- [x] Step 4. Commit only dependency configuration and the finalized plan dependency details.
 
 ```sh
 git add stack.yaml stack.yaml.lock nix/dev-shell.nix duraflow-core/duraflow.cabal docs/superpowers/plans/2026-09-14-weather-workflow-mvp.md
@@ -157,7 +158,7 @@ productionStorageOps :: StorageOps
 
 `storeRunConfig` contains the canonical state directory. `readSnapshot` validates the entry and strict schema, but does not repair it. `recoverSnapshot` synchronizes the existing canonical file and then its directory. `StorageOps` is an internal injectable record of write, file synchronization, replacement, and directory synchronization operations; no global mutable fault switches and no test seam in the public facade. Each operation keeps its own path/handle parameters so tests can wrap real operations and fail a chosen transition.
 
-- [ ] Step 1. Write schema and path-validation tests before the implementation. Build fixtures with Aeson values, not brittle encoded-object key order. The tests must assert actual rejection or decoded equality.
+- [x] Step 1. Write schema and path-validation tests before the implementation. Build fixtures with Aeson values, not brittle encoded-object key order. The tests must assert actual rejection or decoded equality.
 
 ```haskell
 let sid = ExecutionId "example-1"
@@ -169,7 +170,7 @@ assertLeft "path execution id" (validateRunConfig (RunConfig dir (ExecutionId ".
 
 `assertEqual`, `assertLeft`, and `withTestDirectory` belong in `TestSupport`; failed assertions throw with the case name and expected/actual values only for synthetic test fixtures. Cover empty and 129-character IDs, non-ASCII IDs, valid punctuation after an initial ASCII alphanumeric, blank workflow name/version/task IDs, exact untrimmed values, every missing/unexpected field, field type errors, all statuses, extra status-specific fields, error text over 2048 characters, duplicate IDs, unfinished-middle histories, and completed unfinished histories. Application JSON values remain opaque.
 
-- [ ] Step 2. Run `nix develop --no-write-lock-file --command stack test`; record the initial missing API or failing assertion. Implement the types and schema parser with exact key-set checks for snapshot and status-dependent records. Aeson structural Value equality is the compatibility relation. Reject invalid saved metadata and histories, rather than trusting internal constructors.
+- [x] Step 2. Run `nix develop --no-write-lock-file --command stack test`; record the initial missing API or failing assertion. Implement the types and schema parser with exact key-set checks for snapshot and status-dependent records. Aeson structural Value equality is the compatibility relation. Reject invalid saved metadata and histories, rather than trusting internal constructors.
 
 ```haskell
 -- The record schema is deliberately status dependent.
@@ -180,7 +181,7 @@ assertLeft "path execution id" (validateRunConfig (RunConfig dir (ExecutionId ".
 --           workflowInput,completed,tasks
 ```
 
-- [ ] Step 3. Add failing storage tests using real temporary directories and wrapped `StorageOps`. Record an event list and inject failures at write, file sync, replace, directory sync, and recovery file/directory barriers. Assert the old complete snapshot remains before replacement and the new complete snapshot is visible after a post-replacement failure. Never infer that a reported failure means replacement did not happen. Assert leftover temporary files are ignored.
+- [x] Step 3. Add failing storage tests using real temporary directories and wrapped `StorageOps`. Record an event list and inject failures at write, file sync, replace, directory sync, and recovery file/directory barriers. Assert the old complete snapshot remains before replacement and the new complete snapshot is visible after a post-replacement failure. Never infer that a reported failure means replacement did not happen. Assert leftover temporary files are ignored.
 
 ```haskell
 withExecutionStore productionStorageOps cfg $ \store -> do
@@ -191,9 +192,9 @@ withExecutionStore productionStorageOps cfg $ \store -> do
 
 Tests must also check owner-only mode bits for new lock, snapshot, and the temporary file while the write callback sees it; reject symlink, directory, and FIFO snapshot/lock entries without opening or blocking on them. Check a directory symlink resolves to the same store. The permanent lock inode must remain unchanged across two invocations and never be unlinked during cleanup.
 
-- [ ] Step 4. Implement the storage protocol. Validate config, canonicalize an existing directory, derive only the validated filename components, reject unsafe entries with POSIX `lstat`, and provision the permanent lock privately before `tryLockFile Exclusive`. Use a nonblocking lock for the callback lifetime and `bracket`/`mask` for ownership cleanup. New files use mode 0600 without changing process-global umask. Use unique same-directory temporary files, force all encoded bytes before beginning their write, synchronize through a file descriptor, close, rename, then synchronize the directory. Cleanup removes only this operation's temporary file. Do not delete the lock and do not roll back after rename. Re-throw asynchronous exceptions; classify synchronous filesystem errors as `StorageFailure` without dumping state.
+- [x] Step 4. Implement the storage protocol. Validate config, canonicalize an existing directory, derive only the validated filename components, reject unsafe entries with POSIX `lstat`, and provision the permanent lock privately before `tryLockFile Exclusive`. Use a nonblocking lock for the callback lifetime and `bracket`/`mask` for ownership cleanup. New files use mode 0600 without changing process-global umask. Use unique same-directory temporary files, force all encoded bytes before beginning their write, synchronize through a file descriptor, close, rename, then synchronize the directory. Cleanup removes only this operation's temporary file. Do not delete the lock and do not roll back after rename. Re-throw asynchronous exceptions; classify synchronous filesystem errors as `StorageFailure` without dumping state.
 
-- [ ] Step 5. Run all core tests and confirm no compiler warnings. Commit the storage deliverable.
+- [x] Step 5. Run all core tests and confirm no compiler warnings. Commit the storage deliverable.
 
 ```sh
 nix develop --no-write-lock-file --command stack test
@@ -215,7 +216,7 @@ task :: (ToJSON input, ToJSON output, FromJSON output)
      => TaskId -> input -> (input -> IO output) -> Workflow output
 ```
 
-- [ ] Step 1. Add failing real-runtime tests with IORef action counters and actual persisted snapshots. Start with success, failure in task two, and replay.
+- [x] Step 1. Add failing real-runtime tests with IORef action counters and actual persisted snapshots. Start with success, failure in task two, and replay.
 
 ```haskell
 let flow () = do
@@ -229,17 +230,17 @@ assertEqual "successful action skipped" 1 =<< readIORef calls
 
 Use a second case where task two fails once, and task three appends a marker. Assert task three never runs on the first invocation; rerun invokes task two exactly once, preserves task one's saved output, and completes. Run the focused tests and record RED evidence.
 
-- [ ] Step 2. Implement Workflow as a private environment-passing IO computation with an invocation-local cursor and snapshot reference. Its Functor, Applicative and Monad instances sequence through the same environment; do not export its constructor or general IO lifting. Encode and fully force workflow input before initializing or comparing metadata. Under the lock, validate metadata and structural JSON input, synchronize a valid existing snapshot, or commit a new empty identity snapshot. Evaluate orchestration afresh each invocation.
+- [x] Step 2. Implement Workflow as a private environment-passing IO computation with an invocation-local cursor and snapshot reference. Its Functor, Applicative and Monad instances sequence through the same environment; do not export its constructor or general IO lifting. Encode and fully force workflow input before initializing or comparing metadata. Under the lock, validate metadata and structural JSON input, synchronize a valid existing snapshot, or commit a new empty identity snapshot. Evaluate orchestration afresh each invocation.
 
 For a task, validate and force its input before actions. Detect duplicates within the invocation separately from the history cursor. Match saved ID/input before using a record. Decode a successful output without executing the action; an incompatible decode is `ReplayMismatch`. For a retry or append, commit `Running` before restoring interruption for the action. Force the entire encoded output in the action-exception boundary. Commit an ordinary failure as `Failed` then throw `TaskFailure`; preserve the original failure context if this commit instead fails with `StorageFailure`. Keep the success commit outside the action catch so storage errors never become task failures. Update in-memory state only after committed transitions. An outer exception skips completion validation. On normal return require all old records consumed; commit completion unless already completed. Completed histories reject appended tasks.
 
-- [ ] Step 3. Add negative replay tests, then implement only missing behavior. Assert no action counter increments for metadata mismatch, structural-input mismatch, changed IDs/order/inputs, invalid task ID, duplicate invocation ID, corrupt/unknown schema, invalid history, undecodable success, and appended task after completion. Assert a normal shortened orchestration fails but an orchestration exception is not replaced by a missing-old-task error. Test zero tasks, application output without a ToJSON instance, and a workflow input object whose key ordering changes. Exceptions outside tasks propagate intact. Encoding exceptions become task failure only when encoding a task output, before success is committed.
+- [x] Step 3. Add negative replay tests, then implement only missing behavior. Assert no action counter increments for metadata mismatch, structural-input mismatch, changed IDs/order/inputs, invalid task ID, duplicate invocation ID, corrupt/unknown schema, invalid history, undecodable success, and appended task after completion. Assert a normal shortened orchestration fails but an orchestration exception is not replaced by a missing-old-task error. Test zero tasks, application output without a ToJSON instance, and a workflow input object whose key ordering changes. Exceptions outside tasks propagate intact. Encoding exceptions become task failure only when encoding a task output, before success is committed.
 
-- [ ] Step 4. Add process and injection tests before tightening interruption behavior. Child modes in the same test executable use POSIX pipes or flushed line-oriented stdin/stdout handshakes. Never use a guessed sleep to decide a child holds a lock or committed Running. The parent waits for an explicit action-start message, then launches a contender or kills the child and waits for termination. Bound each wait so a regression fails instead of hanging CI.
+- [x] Step 4. Add process and injection tests before tightening interruption behavior. Child modes in the same test executable use POSIX pipes or flushed line-oriented stdin/stdout handshakes. Never use a guessed sleep to decide a child holds a lock or committed Running. The parent waits for an explicit action-start message, then launches a contender or kills the child and waits for termination. Bound each wait so a regression fails instead of hanging CI.
 
 Test same-ID busy with no action, independent different IDs, killed Running resume, completed earlier tasks skipped, cancellation and lock release, and no partial canonical JSON. Inject every commit phase around Running, Success and failure recording. Assert no action starts after a failed Running commit, no dependent action starts after a failed Success commit, and recovery barrier failure prevents cached reuse and new actions. Inject a failed success commit after an effect, rerun, and assert the effect count reaches two. Assert an external asynchronous exception is never saved as Failed.
 
-- [ ] Step 5. Run the complete core suite once before committing. The test executable prints named case results and exits nonzero on any failure.
+- [x] Step 5. Run the complete core suite once before committing. The test executable prints named case results and exits nonzero on any failure.
 
 ```sh
 nix develop --no-write-lock-file --command stack test
@@ -300,7 +301,7 @@ fetchForecastWith :: Int -> (Text -> IO (Int, ByteString)) -> IO UTCTime -> Weat
 
 ByteString is strict. The Int is the elapsed-time deadline in microseconds; production supplies `30000000`. The transport returns status and fully consumed bytes and production uses `http-client` plus `http-client-tls`, redirects disabled. `fetchForecastWith` encloses transport, complete parsing and forcing in `System.Timeout.timeout`; no broad catch may swallow external cancellation. Capture the retrieval timestamp only after successful response validation, then save it in the forecast. A temporary dummy timestamp used while validating pure structure must never escape. The injectable deadline makes timeout tests fast without changing the production limit.
 
-- [ ] Step 1. Write valid JSON and rendering fixtures and failing parsing tests. The valid response has UTC offset zero, explicit required units, at least two daily rows with the requested date second, and provider coordinates different from the request. Assert that the requested row, both coordinate pairs, URL, provider and supplied timestamp survive parsing and JSON round-trip.
+- [x] Step 1. Write valid JSON and rendering fixtures and failing parsing tests. The valid response has UTC offset zero, explicit required units, at least two daily rows with the requested date second, and provider coordinates different from the request. Assert that the requested row, both coordinate pairs, URL, provider and supplied timestamp survive parsing and JSON round-trip.
 
 ```haskell
 assertEqual "rain threshold" ["Bring rain protection."]
@@ -311,13 +312,13 @@ assertEqual "rain just below" ["No additional preparation was identified by thes
 
 `mildForecast` is a complete fixture Forecast with minimum 10, maximum 20, rain 0, wind 0 and UV 0. Test cold at 5 and 5.01, wind at 40 and 39.99, UV at 3 and 2.99, combinations, every rule in fixed order, and single fallback. Golden text includes requested/provider coordinates separately, all five metrics and units, date, Open-Meteo provider and saved UTC retrieval time; assert exact UTF-8 bytes, LF endings and one final newline.
 
-- [ ] Step 2. Run separate application tests before implementation to record RED. Implement application types and pure parser/advice/rendering. Request `https://api.open-meteo.com/v1/forecast` with supplied coordinates, equal ISO `start_date`/`end_date`, `timezone=UTC`, `temperature_unit=celsius`, `wind_speed_unit=kmh`, and the five daily metrics from the spec. Use URL encoding supplied by the HTTP library rather than locale-dependent formatting. Validate unit strings exactly (`iso8601`, `°C`, `%`, `km/h`, empty UV), zero UTC offset, finite bounded provider coordinates, all array lengths, explicit requested date, missing/null fields, finite values, ordered temperatures, bounded rain, and nonnegative wind/UV. Requested coordinates remain the request values even when provider grid coordinates differ.
+- [x] Step 2. Run separate application tests before implementation to record RED. Implement application types and pure parser/advice/rendering. Request `https://api.open-meteo.com/v1/forecast` with supplied coordinates, equal ISO `start_date`/`end_date`, `timezone=UTC`, `temperature_unit=celsius`, `wind_speed_unit=kmh`, and the five daily metrics from the spec. Use URL encoding supplied by the HTTP library rather than locale-dependent formatting. Validate unit strings exactly (`iso8601`, `°C`, `%`, `km/h`, empty UV), zero UTC offset, finite bounded provider coordinates, all array lengths, explicit requested date, missing/null fields, finite values, ordered temperatures, bounded rain, and nonnegative wind/UV. Requested coordinates remain the request values even when provider grid coordinates differ.
 
-- [ ] Step 3. Add failure tests for malformed JSON, absent date, mismatched array lengths, each wrong/missing unit, nonzero UTC offset, invalid coordinates, missing/null metric, negative wind/UV, rain outside 0 through 100, inverted temperatures and invalid numeric values. Add fake-transport tests for non-2xx status, redirects reported as failure, a deadline during response acquisition and validation, and external cancellation propagation. Assert the clock is not called before response validation and the saved timestamp comes from the injected clock. Implement the production transport with no retries and redirects set to zero.
+- [x] Step 3. Add failure tests for malformed JSON, absent date, mismatched array lengths, each wrong/missing unit, nonzero UTC offset, invalid coordinates, missing/null metric, negative wind/UV, rain outside 0 through 100, inverted temperatures and invalid numeric values. Add fake-transport tests for non-2xx status, redirects reported as failure, a deadline during response acquisition and validation, and external cancellation propagation. Assert the clock is not called before response validation and the saved timestamp comes from the injected clock. Implement the production transport with no retries and redirects set to zero.
 
-- [ ] Step 4. Add writer tests using real output files. Two writes must produce identical complete content, not appended content; a failure must not expose partial target bytes. Reject symlink/nonregular targets again at writing time. Write strict UTF-8 bytes through a private unique same-directory temporary file, synchronize, close, rename and synchronize the parent. Cleanup temporary files under masking and keep actions interruptible. The writer is independent of core storage because it serves an application artifact, not an execution snapshot.
+- [x] Step 4. Add writer tests using real output files. Two writes must produce identical complete content, not appended content; a failure must not expose partial target bytes. Reject symlink/nonregular targets again at writing time. Write strict UTF-8 bytes through a private unique same-directory temporary file, synchronize, close, rename and synchronize the parent. Cleanup temporary files under masking and keep actions interruptible. The writer is independent of core storage because it serves an application artifact, not an execution snapshot.
 
-- [ ] Step 5. Wire the three-task flow and run offline application tests using project-aware module/package flags. Do not move application tests into core Cabal.
+- [x] Step 5. Wire the three-task flow and run offline application tests using project-aware module/package flags. Do not move application tests into core Cabal.
 
 ```sh
 nix develop --no-write-lock-file --command stack runghc --package duraflow --package aeson --package http-client --package http-client-tls --package time -- -iworkflows -iworkflows/test workflows/test/Main.hs
@@ -339,20 +340,20 @@ runCli :: IO ()
 
 The six positional arguments are `STATE_DIR EXECUTION_ID LATITUDE LONGITUDE YYYY-MM-DD OUTPUT_FILE`. There are no defaults. `parseArguments` must reject missing/extra arguments, nonfinite/out-of-range coordinates, and noncanonical or invalid ISO calendar dates. `normalizeInvocation` requires existing directories, canonicalizes state and output parent, constructs the absolute output path, rejects output equal to or inside state using path-component comparisons, and rejects symlink/nonregular output entries, including dangling symlinks. It preserves all request choices in the workflow input. Validate configuration before the first action. No new run/restart subcommand is introduced.
 
-- [ ] Step 1. Add failing CLI/path tests and offline integration tests. Integration injects one saved forecast and a writer that initially fails. Assert the first two records are Success and the third Failed, then rerun with a successful real writer. Assert one fetch total, original timestamp, identical deterministic checklist, and completed state. Delete the committed output and rerun; assert no fetch or write occurs and the absent artifact stays absent. Demonstrate repeatable output replacement in the external-effect/checkpoint gap using an initial writer which completes `writeChecklist` then throws before returning to core.
+- [x] Step 1. Add failing CLI/path tests and offline integration tests. Integration injects one saved forecast and a writer that initially fails. Assert the first two records are Success and the third Failed, then rerun with a successful real writer. Assert one fetch total, original timestamp, identical deterministic checklist, and completed state. Delete the committed output and rerun; assert no fetch or write occurs and the absent artifact stays absent. Demonstrate repeatable output replacement in the external-effect/checkpoint gap using an initial writer which completes `writeChecklist` then throws before returning to core.
 
-- [ ] Step 2. Run the focused offline tests and record RED. Implement CLI parsing and normalization. Use `readMaybe` plus explicit finite/geographic checks; require exact `formatTime defaultTimeLocale "%F" parsedDay == input` after parsing. Normalize output parent before joining the basename; validate `lstat` on the final entry. Compare canonical path components rather than string prefix, so a state sibling such as `state-other` remains legal. Catch ordinary top-level errors into stderr and `exitFailure`, but rethrow external cancellation. Success prints only the absolute returned path.
+- [x] Step 2. Run the focused offline tests and record RED. Implement CLI parsing and normalization. Use `readMaybe` plus explicit finite/geographic checks; require exact `formatTime defaultTimeLocale "%F" parsedDay == input` after parsing. Normalize output parent before joining the basename; validate `lstat` on the final entry. Compare canonical path components rather than string prefix, so a state sibling such as `state-other` remains legal. Catch ordinary top-level errors into stderr and `exitFailure`, but rethrow external cancellation. Success prints only the absolute returned path.
 
-- [ ] Step 3. Create runnable test wrappers. They determine repository root from their own path, `cd` there, and invoke the exact verified Stack package command. The CLI shell tests build no network requests: run missing arguments and invalid requests from a temporary unrelated source directory with absolute `--stack-yaml`, script and `-i` paths. Assert nonzero exit, stderr diagnostics, empty stdout and no new execution snapshot. Cover outputs inside state, state directory aliases, symlink/nonregular output entries and absent parent directories. All helper processes have cleanup traps.
+- [x] Step 3. Create runnable test wrappers. They determine repository root from their own path, `cd` there, and invoke the exact verified Stack package command. The CLI shell tests build no network requests: run missing arguments and invalid requests from a temporary unrelated source directory with absolute `--stack-yaml`, script and `-i` paths. Assert nonzero exit, stderr diagnostics, empty stdout and no new execution snapshot. Cover outputs inside state, state directory aliases, symlink/nonregular output entries and absent parent directories. All helper processes have cleanup traps.
 
 ```sh
 nix develop --no-write-lock-file --command bash scripts/test-weather.sh
 nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
 ```
 
-- [ ] Step 4. Replace scaffold descriptions in all three READMEs with implemented API and command examples. Document private caller-provisioned directories, filename rules, JSON compatibility, workflow-version discipline, replay versus fresh IDs, plaintext/sensitive state, Linux trusted-filesystem limitations, no automatic retries, at-least-once effects, saved timestamps, missing artifacts skipped on replay, separate output paths and last-writer-wins behavior. Include all explicit CLI arguments and a clear warning that the example date must be served by Open-Meteo for a fresh fetch. Keep the live command a user-invoked example, not a test. Document that test failures and SIGKILL tests do not certify hardware power-loss behavior.
+- [x] Step 4. Replace scaffold descriptions in all three READMEs with implemented API and command examples. Document private caller-provisioned directories, filename rules, JSON compatibility, workflow-version discipline, replay versus fresh IDs, plaintext/sensitive state, Linux trusted-filesystem limitations, no automatic retries, at-least-once effects, saved timestamps, missing artifacts skipped on replay, separate output paths and last-writer-wins behavior. Include all explicit CLI arguments and a clear warning that the example date must be served by Open-Meteo for a fresh fetch. Keep the live command a user-invoked example, not a test. Document that test failures and SIGKILL tests do not certify hardware power-loss behavior.
 
-- [ ] Step 5. Update CI to build core and required application packages, run `stack test`, then both separate offline scripts through Nix. Retain pinned actions, cache and exact toolchain ownership. Remove obsolete placeholder-suite comments. Do not introduce credentials or a live weather call.
+- [x] Step 5. Update CI to build core and required application packages, run `stack test`, then both separate offline scripts through Nix. Retain pinned actions, cache and exact toolchain ownership. Remove obsolete placeholder-suite comments. Do not introduce credentials or a live weather call.
 
 ```yaml
 - name: Build all components and application dependencies
