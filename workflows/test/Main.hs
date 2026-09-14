@@ -103,13 +103,16 @@ timestamp = UTCTime (fromGregorian 2026 9 14) (secondsToDiffTime 45296)
 readFixture :: IO ByteString.ByteString
 readFixture = ByteString.readFile (fixturePath "forecast.json")
 
+parseFixtureBody :: ByteString.ByteString -> Either Text Forecast
+parseFixtureBody = parseForecast request (forecastUrl request) timestamp
+
 parsingRoundTrip :: IO ()
 parsingRoundTrip = do
   bytes <- readFixture
   let expectedUrl =
         "https://api.open-meteo.com/v1/forecast?latitude=47.6062&longitude=-122.3321&start_date=2026-09-15&end_date=2026-09-15&timezone=UTC&temperature_unit=celsius&wind_speed_unit=kmh&daily=temperature_2m_min%2Ctemperature_2m_max%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cuv_index_max"
   assertEqual "encoded forecast URL" expectedUrl (forecastUrl request)
-  forecast <- either (fail . show) pure (parseForecast request (forecastUrl request) timestamp bytes)
+  forecast <- either (fail . show) pure (parseFixtureBody bytes)
   assertEqual "selected date" (forecastDate request) (forecastDate (forecastRequest forecast))
   assertEqual "request coordinates" (47.6062, -122.3321) (requestedLatitude (forecastRequest forecast), requestedLongitude (forecastRequest forecast))
   assertEqual "provider coordinates" (47.625, -122.375) (providerLatitude forecast, providerLongitude forecast)
@@ -145,7 +148,7 @@ structuralFailures = do
         , ("null metric", replace "[11.2, 5.0]" "[11.2, null]" bytes)
         , ("nonzero UTC offset", replace "\"utc_offset_seconds\": 0" "\"utc_offset_seconds\": 3600" bytes)
         ]
-  forM_ failures $ \(label, body) -> assertLeft label (parseForecast request (forecastUrl request) timestamp body)
+  forM_ failures $ \(label, body) -> assertLeft label (parseFixtureBody body)
   let allEmpty =
         replace "[2.0, 3.2]" "[]"
           . replace "[12.4, 41.0]" "[]"
@@ -156,7 +159,7 @@ structuralFailures = do
           $ bytes
   assertEqual "all empty daily arrays diagnostic"
     (Left "Error in $: daily arrays must have equal nonzero lengths")
-    (parseForecast request (forecastUrl request) timestamp allEmpty)
+    (parseFixtureBody allEmpty)
 
 unitFailures :: IO ()
 unitFailures = do
@@ -171,9 +174,9 @@ unitFailures = do
         , ("UV", "\"uv_index_max\": \"\"", "\"uv_index_max\": \"index\"")
         ]
   forM_ units $ \(label, original, wrong) -> do
-    assertLeft (label <> " wrong") (parseForecast request (forecastUrl request) timestamp (replaceUtf8 original wrong bytes))
+    assertLeft (label <> " wrong") (parseFixtureBody (replaceUtf8 original wrong bytes))
     let renamed = "\"missing_" <> Text.drop 1 original
-    assertLeft (label <> " missing") (parseForecast request (forecastUrl request) timestamp (replaceUtf8 original renamed bytes))
+    assertLeft (label <> " missing") (parseFixtureBody (replaceUtf8 original renamed bytes))
 
 valueFailures :: IO ()
 valueFailures = do
@@ -190,7 +193,7 @@ valueFailures = do
         , ("non-finite numeric", "[2.0, 3.2]", "[2.0, 1e400]")
         ]
   forM_ malformedValues $ \(label, original, wrong) ->
-    assertLeft label (parseForecast request (forecastUrl request) timestamp (replace original wrong bytes))
+    assertLeft label (parseFixtureBody (replace original wrong bytes))
   let invalidRequests =
         [ request {requestedLatitude = 0 / 0}
         , request {requestedLatitude = 90.01}
@@ -228,7 +231,7 @@ unselectedRowFailure = do
   bytes <- readFixture
   let invalid = replace "[12.4, 41.0]" "[-1, 41.0]" bytes
   assertEqual "unselected row diagnostic" (Left "Error in $: wind speed is negative")
-    (parseForecast request (forecastUrl request) timestamp invalid)
+    (parseFixtureBody invalid)
 
 aggregateMetricFailures :: IO ()
 aggregateMetricFailures = do
@@ -246,7 +249,7 @@ aggregateMetricFailures = do
         , "UV index is negative"
         ])
   assertEqual "aggregate metric diagnostics" expected
-    (parseForecast request (forecastUrl request) timestamp invalid)
+    (parseFixtureBody invalid)
 
 transportFailures :: IO ()
 transportFailures = do
@@ -280,7 +283,7 @@ transportFailures = do
 writerCases :: IO ()
 writerCases = withTestDirectory "writer" $ \directory -> do
   bytes <- readFixture
-  forecast <- either (fail . show) pure (parseForecast request (forecastUrl request) timestamp bytes)
+  forecast <- either (fail . show) pure (parseFixtureBody bytes)
   let checklist = prepareAdvice forecast
       target = directory </> "checklist.txt"
   first <- writeChecklist (target, checklist)
@@ -346,16 +349,21 @@ mildForecast = Forecast
   }
 
 thresholdCases :: IO ()
-thresholdCases = do
-  assertEqual "fallback" ["No additional preparation was identified by these rules."] (items mildForecast)
-  assertEqual "rain threshold" ["Bring rain protection."] (items mildForecast {rainProbability = 50})
-  assertEqual "rain just below" ["No additional preparation was identified by these rules."] (items mildForecast {rainProbability = 49.99})
-  assertEqual "cold threshold" ["Bring warm layers."] (items mildForecast {minimumTemperature = 5})
-  assertEqual "cold just above" ["No additional preparation was identified by these rules."] (items mildForecast {minimumTemperature = 5.01})
-  assertEqual "wind threshold" ["Secure loose outdoor items and prepare for wind."] (items mildForecast {maximumWindSpeed = 40})
-  assertEqual "wind just below" ["No additional preparation was identified by these rules."] (items mildForecast {maximumWindSpeed = 39.99})
-  assertEqual "UV threshold" ["Use sun protection."] (items mildForecast {maximumUvIndex = 3})
-  assertEqual "UV just below" ["No additional preparation was identified by these rules."] (items mildForecast {maximumUvIndex = 2.99})
+thresholdCases =
+  forM_ cases $ \(label, forecast, expected) -> assertEqual label expected (items forecast)
+ where
+  fallback = ["No additional preparation was identified by these rules."]
+  cases =
+    [ ("fallback", mildForecast, fallback)
+    , ("rain threshold", mildForecast {rainProbability = 50}, ["Bring rain protection."])
+    , ("rain just below", mildForecast {rainProbability = 49.99}, fallback)
+    , ("cold threshold", mildForecast {minimumTemperature = 5}, ["Bring warm layers."])
+    , ("cold just above", mildForecast {minimumTemperature = 5.01}, fallback)
+    , ("wind threshold", mildForecast {maximumWindSpeed = 40}, ["Secure loose outdoor items and prepare for wind."])
+    , ("wind just below", mildForecast {maximumWindSpeed = 39.99}, fallback)
+    , ("UV threshold", mildForecast {maximumUvIndex = 3}, ["Use sun protection."])
+    , ("UV just below", mildForecast {maximumUvIndex = 2.99}, fallback)
+    ]
 
 combinationCases :: IO ()
 combinationCases = do
@@ -692,11 +700,22 @@ compilerFailureGuard repositoryRoot temporary state = do
       stubEnvironment = ("PATH", path) : filter ((/= "PATH") . fst) environment
       expected = "expected six arguments: STATE_DIR EXECUTION_ID LATITUDE LONGITUDE YYYY-MM-DD OUTPUT_FILE"
   result <- runWeatherCommand repositoryRoot temporary (Just stubEnvironment) []
-  rejected <- try (assertCliResult state "compiler-failure" expected result)
-  case (rejected :: Either TestFailure ()) of
-    Left _ -> pure ()
-    Right () -> throwIO (TestFailure "CLI result assertion accepted compiler startup failure")
+  assertRejected "compiler startup failure" $
+    assertCliResult state "compiler-failure" expected result
+  let expectedLine = "user error (" <> expected <> ")"
+  assertRejected "mixed application and compiler failure" $
+    assertCliResult state "mixed-failure" expected
+      (CliResult (ExitFailure 1) "" (expectedLine <> "\nsimulated compiler failure\n"))
+  assertRejected "duplicate application diagnostics" $
+    assertCliResult state "duplicate-diagnostic" expected
+      (CliResult (ExitFailure 1) "" (expectedLine <> "\n" <> expectedLine <> "\n"))
   subprocessCleanupRegressions temporary
+ where
+  assertRejected label action = do
+    rejected <- try action
+    case (rejected :: Either TestFailure ()) of
+      Left _ -> pure ()
+      Right () -> throwIO (TestFailure ("CLI result assertion accepted " <> label))
 
 subprocessCleanupRegressions :: FilePath -> IO ()
 subprocessCleanupRegressions temporary = do
