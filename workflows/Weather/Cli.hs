@@ -7,7 +7,7 @@ module Weather.Cli
   , runCli
   ) where
 
-import Control.Exception (AsyncException, IOException, SomeException, catch, displayException, fromException, throwIO)
+import Control.Exception (IOException, catch)
 import Control.Monad (unless, when)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -15,13 +15,12 @@ import Data.Time (Day, defaultTimeLocale, formatTime, parseTimeM)
 import Duraflow (ExecutionId (..), RunConfig (..), runWorkflow)
 import System.Directory (canonicalizePath, doesDirectoryExist)
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
 import System.FilePath (normalise, splitDirectories, takeDirectory, takeFileName, (</>))
-import System.IO (hPutStrLn, stderr)
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files (FileStatus, getSymbolicLinkStatus, isRegularFile)
 import Text.Read (readMaybe)
 import Weather
+import Weather.Cli.Internal (handleTopLevelErrors)
 
 parseArguments :: [String] -> Either Text (FilePath, ExecutionId, WeatherRequest)
 parseArguments arguments = case arguments of
@@ -57,19 +56,12 @@ normalizeInvocation (state, execution, request) = do
     )
 
 runCli :: IO ()
-runCli = run `catch` reportFailure
- where
-  run = do
-    arguments <- getArgs
-    invocation <- either (ioError . userError . Text.unpack) pure (parseArguments arguments)
-    (config, request) <- normalizeInvocation invocation
-    result <- runWorkflow config request weatherPreparation
-    putStrLn result
-
-  reportFailure :: SomeException -> IO ()
-  reportFailure exception = case fromException exception :: Maybe AsyncException of
-    Just cancellation -> throwIO cancellation
-    Nothing -> hPutStrLn stderr (displayException exception) >> exitFailure
+runCli = handleTopLevelErrors $ do
+  arguments <- getArgs
+  invocation <- either (ioError . userError . Text.unpack) pure (parseArguments arguments)
+  (config, request) <- normalizeInvocation invocation
+  result <- runWorkflow config request weatherPreparation
+  putStrLn result
 
 parseCoordinate :: Text -> Double -> Double -> String -> Either Text Double
 parseCoordinate label lower upper input = case readMaybe input of

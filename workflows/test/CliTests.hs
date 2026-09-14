@@ -3,7 +3,15 @@
 
 module CliTests (runCliTests) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception
+  ( AsyncException
+  , Exception (fromException, toException)
+  , SomeException
+  , asyncExceptionFromException
+  , asyncExceptionToException
+  , throwIO
+  , try
+  )
 import Data.Either (isLeft)
 import Data.Time (fromGregorian)
 import Duraflow (ExecutionId (..), RunConfig (..))
@@ -17,6 +25,7 @@ import System.FilePath ((</>))
 import TestSupport
 import Weather (WeatherRequest (..))
 import Weather.Cli (normalizeInvocation, parseArguments)
+import Weather.Cli.Internal (handleTopLevelErrors)
 
 runCliTests :: IO ()
 runCliTests = do
@@ -24,6 +33,7 @@ runCliTests = do
   runCase "CLI rejects invalid argument values" parseInvalid
   runCase "CLI canonicalizes safe paths" normalizeSafePaths
   runCase "CLI rejects unsafe output paths" normalizeUnsafePaths
+  runCase "CLI rethrows cancellation from the broad async hierarchy" rethrowsBroadCancellation
 
 parseValid :: IO ()
 parseValid =
@@ -96,6 +106,27 @@ normalizeUnsafePaths = withTestDirectory "cli-unsafe" $ \root -> do
   assertIOThrows "dangling symlink output" (normalize dangling)
   assertIOThrows "nonregular output" (normalize directoryTarget)
   assertIOThrows "missing output parent" (normalize (root </> "missing" </> "report.txt"))
+
+data TestCancellation = TestCancellation deriving (Show)
+
+instance Exception TestCancellation where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
+
+rethrowsBroadCancellation :: IO ()
+rethrowsBroadCancellation = do
+  outcome <- try (handleTopLevelErrors (throwIO TestCancellation))
+  case (outcome :: Either SomeException ()) of
+    Left exception -> do
+      assertBool "not a concrete AsyncException" $
+        case fromException exception :: Maybe AsyncException of
+          Nothing -> True
+          Just _ -> False
+      assertBool "original custom cancellation preserved" $
+        case fromException exception :: Maybe TestCancellation of
+          Just TestCancellation -> True
+          Nothing -> False
+    Right () -> assertBool "custom cancellation unexpectedly returned" False
 
 assertIOThrows :: forall a. String -> IO a -> IO ()
 assertIOThrows label action = do
