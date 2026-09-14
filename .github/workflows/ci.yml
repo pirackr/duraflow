@@ -42,10 +42,11 @@ jobs:
           restore-keys: |
             stack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/*.nix', 'stack.yaml', 'stack.yaml.lock', '**/*.cabal') }}-
 
-      - name: Build all components
-        run: nix develop --no-write-lock-file --command stack build --test --no-run-tests
+      - name: Build all components and application dependencies
+        run: nix develop --no-write-lock-file --command stack build --test --no-run-tests http-client http-client-tls duraflow
 
-      # Currently a placeholder suite; this is not workflow/LLM coverage.
-      # CI does not need pi, model credentials, or a running model server.
-      - name: Run tests
+      - name: Run core tests
         run: nix develop --no-write-lock-file --command stack test
+
+      - name: Run unified offline weather tests
+        run: nix develop --no-write-lock-file --command bash scripts/test-weather.sh
