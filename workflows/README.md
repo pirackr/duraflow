@@ -1,10 +1,10 @@
 # Weather workflow example
 
-`WeatherWorkflow.hs` is a runnable `Main` script. It delegates CLI
-handling to `Weather.Cli`; `Weather` owns the application types, Open-Meteo
-client, deterministic advice, durable checklist writer, and three-task
-orchestration. This directory is application code rather than a Cabal package,
-and the core does not know it exists.
+`WeatherWorkflow.hs` is the named runnable `WeatherWorkflow` module. It contains
+all weather application types, CLI handling, Open-Meteo client behavior,
+deterministic advice, checklist rendering, and three-task orchestration. This
+directory is application code rather than a Cabal package, and the core does
+not know it exists.
 
 ## Command
 

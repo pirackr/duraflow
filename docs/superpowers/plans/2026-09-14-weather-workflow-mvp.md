@@ -387,6 +387,13 @@ UTF-8 encodes rendered output and returns its path. Verification includes the
 full CI commands, strict warning-only compilation of both entrypoints, and loading
 the named runnable module from an unrelated working directory.
 
+After review-driven readability formatting, the original weather application
+aggregate of 650 lines is represented by a 385-line `WeatherWorkflow.hs` and a
+separate 142-line shared durable-file helper. The weather file itself is 265
+lines shorter than the original aggregate. The extracted helper is reported
+separately rather than counted as deleted code; together these production files
+are 527 lines, a genuine structural reduction of 123 lines.
+
 ## Final review and PR handoff
 
 Verify the original checkout index and pending files remain untouched. Record test results and any limitations in the PR body. Push only `feat/weather-workflow-mvp` using GitHub CLI authentication, then create a PR with `gh pr create --base main --head feat/weather-workflow-mvp`; never push directly to main or merge. Include the spec and plan links, dependency pin, core and weather checks, durability limitations, and a statement that no live forecast smoke test was run. The user requested execution and a PR, so do not pause for another execution-choice prompt.
