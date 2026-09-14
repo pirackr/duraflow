@@ -12,4 +12,5 @@ stack runghc \
   --package http-client-tls \
   --package process \
   --package time \
+  --package unix \
   -- -iworkflows -iworkflows/test workflows/test/Main.hs

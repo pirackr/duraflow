@@ -14,6 +14,7 @@ import Control.Exception
   , bracket
   , catch
   , finally
+  , mask
   , onException
   , throwIO
   , try
@@ -47,14 +48,18 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (IOMode (WriteMode), hClose, openFile, openTempFile)
+import System.IO.Error (catchIOError)
 import System.Posix.Files (ownerExecuteMode, ownerReadMode, ownerWriteMode, setFileMode, unionFileModes)
+import System.Posix.Signals (Signal, nullSignal, sigKILL, sigTERM, signalProcess, signalProcessGroup)
+import System.Posix.Types (ProcessID)
 import System.Process
-  ( CreateProcess (cwd, env, std_err, std_out)
+  ( CreateProcess (create_group, cwd, env, std_err, std_out)
   , ProcessHandle
   , StdStream (UseHandle)
   , createProcess
+  , getPid
+  , getProcessExitCode
   , proc
-  , terminateProcess
   , waitForProcess
   )
 import System.Timeout (timeout)
@@ -627,6 +632,103 @@ compilerFailureGuard repositoryRoot temporary state = do
   case (rejected :: Either TestFailure ()) of
     Left _ -> pure ()
     Right () -> throwIO (TestFailure "CLI result assertion accepted compiler startup failure")
+  subprocessCleanupRegressions temporary
+
+subprocessCleanupRegressions :: FilePath -> IO ()
+subprocessCleanupRegressions temporary = do
+  timeoutProbe <- prepareProbe temporary "timeout-probe"
+  testTimeoutCleanup timeoutProbe `finally` forceProbeCleanup timeoutProbe
+  cancellationProbe <- prepareProbe temporary "cancellation-probe"
+  testCancellationCleanup cancellationProbe `finally` forceProbeCleanup cancellationProbe
+
+data Probe = Probe
+  { probeDirectory :: FilePath
+  , probeLeaderPath :: FilePath
+  , probeDescendantPath :: FilePath
+  , probeReadyPath :: FilePath
+  }
+
+prepareProbe :: FilePath -> String -> IO Probe
+prepareProbe temporary name = do
+  let directory = temporary </> name
+  createDirectory directory
+  pure Probe
+    { probeDirectory = directory
+    , probeLeaderPath = directory </> "leader.pid"
+    , probeDescendantPath = directory </> "descendant.pid"
+    , probeReadyPath = directory </> "ready"
+    }
+
+probeCommand :: Probe -> CreateProcess
+probeCommand probe = proc "sh"
+  [ "-c"
+  , "trap '' TERM; echo $$ > \"$1\"; sh -c 'trap \"\" TERM; echo $$ > \"$1\"; touch \"$2\"; while :; do sleep 1; done' _ \"$2\" \"$3\" & wait"
+  , "_"
+  , probeLeaderPath probe
+  , probeDescendantPath probe
+  , probeReadyPath probe
+  ]
+
+awaitProbeReady :: Probe -> IO ()
+awaitProbeReady probe = within "cleanup probe readiness" $ do
+  ready <- doesFileExist (probeReadyPath probe)
+  if ready then pure () else threadDelay 10000 >> awaitProbeReady probe
+
+testTimeoutCleanup :: Probe -> IO ()
+testTimeoutCleanup probe = do
+  result <- newEmptyMVar
+  _ <- forkIO $ do
+    outcome <- try (runCapturedCommand 1000000 (probeDirectory probe) (probeCommand probe))
+    putMVar result (outcome :: Either TestFailure CliResult)
+  awaitProbeReady probe
+  outcome <- within "timed out subprocess runner completes" (takeMVar result)
+  case outcome of
+    Left (TestFailure message) -> assertEqual "timeout remains a test failure" "CLI child process timed out" message
+    Right _ -> throwIO (TestFailure "timed out child returned a successful test result")
+  assertProbeGroupGone probe
+
+testCancellationCleanup :: Probe -> IO ()
+testCancellationCleanup probe = do
+  result <- newEmptyMVar
+  runner <- forkIO $ do
+    outcome <- try (runCapturedCommand (10 * 1000 * 1000) (probeDirectory probe) (probeCommand probe))
+    putMVar result (outcome :: Either SomeException CliResult)
+  awaitProbeReady probe
+  killThread runner
+  outcome <- within "cancelled subprocess runner completes" (takeMVar result)
+  assertBool "original subprocess cancellation preserved" $ case outcome of
+    Left exception -> fromException exception == Just ThreadKilled
+    Right _ -> False
+  assertProbeGroupGone probe
+
+assertProbeGroupGone :: Probe -> IO ()
+assertProbeGroupGone probe = do
+  leader <- readProbePid (probeLeaderPath probe)
+  descendant <- readProbePid (probeDescendantPath probe)
+  within "subprocess group cleanup" $ do
+    groupAlive <- processGroupExists leader
+    descendantAlive <- processExists descendant
+    if groupAlive || descendantAlive
+      then threadDelay 10000 >> assertProbeGroupGone probe
+      else pure ()
+
+readProbePid :: FilePath -> IO ProcessID
+readProbePid path = read <$> readFileStrict path
+
+processGroupExists :: ProcessID -> IO Bool
+processGroupExists processId =
+  (signalProcessGroup nullSignal processId >> pure True) `catchIOError` \_ -> pure False
+
+processExists :: ProcessID -> IO Bool
+processExists processId =
+  (signalProcess nullSignal processId >> pure True) `catchIOError` \_ -> pure False
+
+forceProbeCleanup :: Probe -> IO ()
+forceProbeCleanup probe = do
+  leaderExists <- doesFileExist (probeLeaderPath probe)
+  if leaderExists
+    then readProbePid (probeLeaderPath probe) >>= signalGroupIgnoringMissing sigKILL
+    else pure ()
 
 data CliResult = CliResult ExitCode String String
 
@@ -649,44 +751,63 @@ runWeatherCommand repositoryRoot workingDirectory commandEnvironment application
         , "--ghc-arg=WeatherWorkflow.main"
         , source
         ] <> applicationArguments
-      stdoutPath = workingDirectory </> "child.stdout"
-      stderrPath = workingDirectory </> "child.stderr"
       stackCommand = case commandEnvironment of
         Nothing -> "stack"
         Just _ -> workingDirectory </> "failure-stub" </> "stack"
-  stdoutHandle <- openFile stdoutPath WriteMode
-  stderrHandle <- openFile stderrPath WriteMode
-  let command = (proc stackCommand arguments)
+      command = (proc stackCommand arguments)
         { cwd = Just workingDirectory
         , env = commandEnvironment
-        , std_out = UseHandle stdoutHandle
-        , std_err = UseHandle stderrHandle
         }
-  (_, _, _, processHandle) <-
-    createProcess command
-      `onException` (hClose stdoutHandle >> hClose stderrHandle)
+  runCapturedCommand (60 * 1000 * 1000) workingDirectory command
+
+runCapturedCommand :: Int -> FilePath -> CreateProcess -> IO CliResult
+runCapturedCommand waitMicros workingDirectory command = do
+  let stdoutPath = workingDirectory </> "child.stdout"
+      stderrPath = workingDirectory </> "child.stderr"
   exitCode <-
-    waitBounded processHandle
-      `onException` stopProcess processHandle
-      `finally` (hClose stdoutHandle >> hClose stderrHandle)
+    bracket (openFile stdoutPath WriteMode) hClose $ \stdoutHandle ->
+      bracket (openFile stderrPath WriteMode) hClose $ \stderrHandle -> do
+        let redirected = command
+              { create_group = True
+              , std_out = UseHandle stdoutHandle
+              , std_err = UseHandle stderrHandle
+              }
+        mask $ \restore -> do
+          (_, _, _, processHandle) <- createProcess redirected
+          processId <- getPid processHandle
+          restore (waitBounded waitMicros processHandle)
+            `onException` stopProcess processId processHandle
   stdoutText <- readFileStrict stdoutPath
   stderrText <- readFileStrict stderrPath
   pure (CliResult exitCode stdoutText stderrText)
 
-waitBounded :: ProcessHandle -> IO ExitCode
-waitBounded processHandle = do
-  outcome <- timeout (60 * 1000 * 1000) (waitForProcess processHandle)
+waitBounded :: Int -> ProcessHandle -> IO ExitCode
+waitBounded waitMicros processHandle = do
+  outcome <- timeout waitMicros (waitForProcess processHandle)
   case outcome of
     Just exitCode -> pure exitCode
-    Nothing -> do
-      stopProcess processHandle
-      throwIO (TestFailure "CLI child process timed out")
+    Nothing -> throwIO (TestFailure "CLI child process timed out")
 
-stopProcess :: ProcessHandle -> IO ()
-stopProcess processHandle = do
-  terminateProcess processHandle
-  _ <- waitForProcess processHandle
-  pure ()
+stopProcess :: Maybe ProcessID -> ProcessHandle -> IO ()
+stopProcess processId processHandle = do
+  forM_ processId $ \pid -> signalGroupIgnoringMissing sigTERM pid
+  running <- getProcessExitCode processHandle
+  reapedAfterTerm <- case running of
+    Just exitCode -> pure (Just exitCode)
+    Nothing -> timeout 200000 (waitForProcess processHandle)
+  groupStillAlive <- case processId of
+    Nothing -> pure False
+    Just pid -> processGroupExists pid
+  if groupStillAlive || reapedAfterTerm == Nothing
+    then do
+      forM_ processId $ \pid -> signalGroupIgnoringMissing sigKILL pid
+      _ <- timeout 1000000 (waitForProcess processHandle)
+      pure ()
+    else pure ()
+
+signalGroupIgnoringMissing :: Signal -> ProcessID -> IO ()
+signalGroupIgnoringMissing signal processId =
+  signalProcessGroup signal processId `catchIOError` \_ -> pure ()
 
 readFileStrict :: FilePath -> IO String
 readFileStrict path = do
