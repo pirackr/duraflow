@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -121,9 +122,9 @@ weatherWorkflowVersion = "1"
 
 weatherPreparationWith :: WeatherEffects -> WeatherRequest -> Workflow FilePath
 weatherPreparationWith effects request = do
-    forecast <- task (TaskId "fetchForecast") request (getForecast effects)
+    forecast <- task (TaskId "fetchForecast") request effects.getForecast
     checklist <- task (TaskId "prepareAdvice") forecast (pure . prepareAdvice)
-    task (TaskId "writeChecklist") (outputPath request, checklist) (putChecklist effects)
+    task (TaskId "writeChecklist") (request.outputPath, checklist) effects.putChecklist
 
 weatherPreparation :: WeatherRequest -> Workflow FilePath
 weatherPreparation =
@@ -145,10 +146,10 @@ forecastUrl request = Text.pack (show (getUri configured))
                 , port = 443
                 , path = "/v1/forecast"
                 }
-    encodedDate = ByteString8.pack (show (forecastDate request))
+    encodedDate = ByteString8.pack (show request.forecastDate)
     query =
-        [ ("latitude", Just (number (requestedLatitude request)))
-        , ("longitude", Just (number (requestedLongitude request)))
+        [ ("latitude", Just (number request.requestedLatitude))
+        , ("longitude", Just (number request.requestedLongitude))
         , ("start_date", Just encodedDate)
         , ("end_date", Just encodedDate)
         , ("timezone", Just "UTC")
@@ -170,10 +171,12 @@ forecastParser request url timestamp = withObject "forecast response" $ \object 
     offset <- object .: "utc_offset_seconds"
     units <- object .: "daily_units"
     daily <- object .: "daily"
-    either (fail . Text.unpack) pure $ do
-        validateCoordinates "requested" (requestedLatitude request) (requestedLongitude request)
-        when (offset /= (0 :: Int)) (Left "UTC offset must be zero")
-        validateCoordinates "provider" latitude longitude
+    either (fail . Text.unpack . Text.intercalate "\n") pure $
+        validate () $
+            [ (offset == (0 :: Int), "UTC offset must be zero")
+            ]
+                <> coordinateRules "requested" request.requestedLatitude request.requestedLongitude
+                <> coordinateRules "provider" latitude longitude
     parseDaily request url timestamp latitude longitude units daily
 
 parseDaily :: WeatherRequest -> Text -> UTCTime -> Double -> Double -> Object -> Object -> Parser Forecast
@@ -190,12 +193,14 @@ parseDaily request url timestamp latitude longitude units daily = do
     rains <- daily .: "precipitation_probability_max"
     winds <- daily .: "wind_speed_10m_max"
     uvs <- daily .: "uv_index_max"
-    either (fail . Text.unpack) pure $ do
+    either (fail . Text.unpack . Text.intercalate "\n") pure $ do
         validateUnits [timeU, minU, maxU, rainU, windU, uvU]
         let lengths = [length dates, length mins, length maxs, length rains, length winds, length uvs]
-        unless (not (null dates) && all (== length dates) lengths) (Left "daily arrays must have equal nonzero lengths")
-        mapM_ validateDailyRow (zip5 mins maxs rains winds uvs)
-        position <- maybe (Left "requested forecast date is absent") Right (findIndex (== forecastDate request) dates)
+        validate ()
+            [ (not (null dates) && all (== length dates) lengths, "daily arrays must have equal nonzero lengths")
+            ]
+        validateDailyRows (zip5 mins maxs rains winds uvs)
+        position <- maybe (Left ["requested forecast date is absent"]) Right (findIndex (== request.forecastDate) dates)
         let at xs = xs !! position
         pure
             Forecast
@@ -213,30 +218,74 @@ parseDaily request url timestamp latitude longitude units daily = do
                 , retrievedAt = timestamp
                 }
 
-validateDailyRow :: (Double, Double, Double, Double, Double) -> Either Text ()
-validateDailyRow (minimumValue, maximumValue, rainValue, windValue, uvValue) = do
-    mapM_ (validateFinite "forecast metric") [minimumValue, maximumValue, rainValue, windValue, uvValue]
-    when (minimumValue > maximumValue) (Left "minimum temperature exceeds maximum temperature")
-    unless (rainValue >= 0 && rainValue <= 100) (Left "rain probability is outside 0 through 100")
-    when (windValue < 0) (Left "wind speed is negative")
-    when (uvValue < 0) (Left "UV index is negative")
+data TemperatureRange = TemperatureRange
+    { minimum :: Double
+    , maximum :: Double
+    }
+    deriving (Eq, Show)
 
-validateCoordinates :: Text -> Double -> Double -> Either Text ()
-validateCoordinates label latitude longitude = do
-    validateFinite (label <> " latitude") latitude
-    validateFinite (label <> " longitude") longitude
-    unless (latitude >= -90 && latitude <= 90) (Left (label <> " latitude is outside geographic bounds"))
-    unless (longitude >= -180 && longitude <= 180) (Left (label <> " longitude is outside geographic bounds"))
+data DailyMetrics = DailyMetrics
+    { temperature :: TemperatureRange
+    , rain :: Double
+    , wind :: Double
+    , uv :: Double
+    }
+    deriving (Eq, Show)
 
-validateFinite :: Text -> Double -> Either Text ()
-validateFinite label value = when (isNaN value || isInfinite value) (Left (label <> " must be finite"))
+validate :: value -> [(Bool, Text)] -> Either [Text] value
+validate value rules =
+    case [message | (passed, message) <- rules, not passed] of
+        [] -> Right value
+        errors -> Left errors
 
-validateUnits :: [Text] -> Either Text ()
-validateUnits actual = mapM_ check (zip labels (zip expected actual))
+validateDailyRows :: [(Double, Double, Double, Double, Double)] -> Either [Text] ()
+validateDailyRows rows =
+    case concatMap (either id (const []) . validateDailyRow . toMetrics) rows of
+        [] -> Right ()
+        errors -> Left errors
+  where
+    toMetrics (minimumValue, maximumValue, rainValue, windValue, uvValue) =
+        DailyMetrics (TemperatureRange minimumValue maximumValue) rainValue windValue uvValue
+
+validateDailyRow :: DailyMetrics -> Either [Text] DailyMetrics
+validateDailyRow metrics = validate metrics
+    [ (finite temperature.minimum, "forecast metric must be finite")
+    , (finite temperature.maximum, "forecast metric must be finite")
+    , (finite metrics.rain, "forecast metric must be finite")
+    , (finite metrics.wind, "forecast metric must be finite")
+    , (finite metrics.uv, "forecast metric must be finite")
+    , (not temperaturesFinite || temperature.maximum >= temperature.minimum, "minimum temperature exceeds maximum temperature")
+    , (not (finite metrics.rain) || metrics.rain >= 0 && metrics.rain <= 100, "rain probability is outside 0 through 100")
+    , (not (finite metrics.wind) || metrics.wind >= 0, "wind speed is negative")
+    , (not (finite metrics.uv) || metrics.uv >= 0, "UV index is negative")
+    ]
+  where
+    temperature = metrics.temperature
+    temperaturesFinite = finite temperature.minimum && finite temperature.maximum
+
+validateCoordinates :: Text -> Double -> Double -> Either [Text] ()
+validateCoordinates label latitude longitude =
+    validate () (coordinateRules label latitude longitude)
+
+coordinateRules :: Text -> Double -> Double -> [(Bool, Text)]
+coordinateRules label latitude longitude =
+    [ (finite latitude, label <> " latitude must be finite")
+    , (finite longitude, label <> " longitude must be finite")
+    , (not (finite latitude) || latitude >= -90 && latitude <= 90, label <> " latitude is outside geographic bounds")
+    , (not (finite longitude) || longitude >= -180 && longitude <= 180, label <> " longitude is outside geographic bounds")
+    ]
+
+finite :: Double -> Bool
+finite value = not (isNaN value || isInfinite value)
+
+validateUnits :: [Text] -> Either [Text] ()
+validateUnits actual = validate ()
+    [ (wanted == found, label <> " unit is unexpected")
+    | (label, wanted, found) <- zip3 labels expected actual
+    ]
   where
     labels = ["time", "minimum temperature", "maximum temperature", "precipitation probability", "wind speed", "UV index"]
     expected = ["iso8601", "°C", "°C", "%", "km/h", ""]
-    check (label, (wanted, found)) = unless (wanted == found) (Left (label <> " unit is unexpected"))
 
 firstText :: Either String value -> Either Text value
 firstText = either (Left . Text.pack) Right
@@ -337,10 +386,13 @@ normalizeInvocation (state, execution, request) = do
 parseCoordinate :: Text -> Double -> Double -> String -> Either Text Double
 parseCoordinate label lower upper input = case readMaybe input of
     Nothing -> Left (label <> " must be a number")
-    Just value
-        | isNaN value || isInfinite value -> Left (label <> " must be finite")
-        | value < lower || value > upper -> Left (label <> " is outside its geographic range")
-        | otherwise -> Right value
+    Just value -> firstValidationError $ validate value
+        [ (finite value, label <> " must be finite")
+        , (not (finite value) || value >= lower && value <= upper, label <> " is outside its geographic range")
+        ]
+
+firstValidationError :: Either [Text] value -> Either Text value
+firstValidationError = either (Left . Text.intercalate "\n") Right
 parseDate :: String -> Either Text Day
 parseDate input = case parseTimeM True defaultTimeLocale "%F" input of
     Nothing -> Left "forecast date must be a valid YYYY-MM-DD calendar date"

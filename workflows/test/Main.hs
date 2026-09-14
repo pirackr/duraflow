@@ -89,6 +89,8 @@ runForecastTests = do
   runCase "forecast rejects every invalid unit" unitFailures
   runCase "forecast rejects invalid coordinates and metrics" valueFailures
   runCase "forecast reports independent metric failures in rule order" aggregateMetricFailures
+  runCase "validation helper and direct metric rules" validationRules
+  runCase "forecast validates unselected rows" unselectedRowFailure
   runCase "forecast transport status, deadline, clock, and cancellation" transportFailures
   runCase "checklist writer safely replaces real files" writerCases
 
@@ -184,6 +186,26 @@ valueFailures = do
         , request {requestedLongitude = -180.01}
         ]
   forM_ invalidRequests $ \invalid -> assertLeft "invalid request coordinates" (parseForecast invalid (forecastUrl invalid) timestamp bytes)
+
+validationRules :: IO ()
+validationRules = do
+  assertEqual "empty rules return original value" (Right (42 :: Int)) (validate 42 [])
+  assertEqual "successful rules return original value" (Right ("weather" :: Text))
+    (validate "weather" [(True, "ignored")])
+  assertEqual "failed rules preserve order" (Left ["first", "third"])
+    (validate () [(False, "first"), (True, "second"), (False, "third")])
+  assertBool "equal temperatures are accepted" $
+    not (isLeft (validateDailyRow (DailyMetrics (TemperatureRange 10 10) 0 0 0)))
+  assertEqual "direct nonfinite metrics are rejected without dependent diagnostics"
+    (Left ["forecast metric must be finite"])
+    (validateDailyRow (DailyMetrics (TemperatureRange (0 / 0) 10) 0 0 0))
+
+unselectedRowFailure :: IO ()
+unselectedRowFailure = do
+  bytes <- readFixture
+  let invalid = replace "[12.4, 41.0]" "[-1, 41.0]" bytes
+  assertEqual "unselected row diagnostic" (Left "Error in $: wind speed is negative")
+    (parseForecast request (forecastUrl request) timestamp invalid)
 
 aggregateMetricFailures :: IO ()
 aggregateMetricFailures = do
