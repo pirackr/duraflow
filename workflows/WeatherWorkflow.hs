@@ -292,11 +292,8 @@ validateUnits actual = validate ()
     labels = ["time", "minimum temperature", "maximum temperature", "precipitation probability", "wind speed", "UV index"]
     expected = ["iso8601", "°C", "°C", "%", "km/h", ""]
 
-validationMessage :: [Text] -> Text
-validationMessage = Text.intercalate "\n"
-
 parseValidation :: Either [Text] value -> Parser value
-parseValidation = either (fail . Text.unpack . validationMessage) pure
+parseValidation = either (fail . Text.unpack) pure . joinValidationErrors
 
 firstText :: Either String value -> Either Text value
 firstText = either (Left . Text.pack) Right
@@ -409,7 +406,7 @@ parseCoordinate label lower upper input =
                     ]
 
 joinValidationErrors :: Either [Text] value -> Either Text value
-joinValidationErrors = either (Left . validationMessage) Right
+joinValidationErrors = either (Left . Text.intercalate "\n") Right
 
 parseDate :: String -> Either Text Day
 parseDate input = case parseTimeM True defaultTimeLocale "%F" input of

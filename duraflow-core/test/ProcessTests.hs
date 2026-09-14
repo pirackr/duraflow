@@ -8,8 +8,8 @@ module ProcessTests
   ) where
 
 import Control.Concurrent (MVar, forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay, throwTo)
-import Control.Exception (AsyncException (ThreadKilled), SomeException, bracket, catch, displayException, fromException, onException, throwIO, try)
-import Control.Monad (forM_, when)
+import Control.Exception (AsyncException (ThreadKilled), IOException, SomeException, bracket, catch, displayException, finally, fromException, onException, throwIO, try)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (ToJSON (toJSON), Value (Null))
 import qualified Data.ByteString as ByteString
 import Data.IORef
@@ -22,7 +22,8 @@ import Duraflow.Internal.Types (Snapshot (..), TaskRecord (..), TaskStatus (..))
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import System.IO (BufferMode (LineBuffering), Handle, hClose, hFlush, hGetLine, hPutStrLn, hSetBuffering, stdout)
+import System.IO (BufferMode (LineBuffering), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering, stdout)
+import System.IO.Error (ioeGetErrorString)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process
   ( CreateProcess (std_in, std_out)
@@ -134,16 +135,37 @@ testKilledResume = withTestDirectory "process-kill" $ \directory -> do
 testChildCleanup :: IO ()
 testChildCleanup = withTestDirectory "child-cleanup" $ \directory -> do
   observed <- newIORef Nothing
-  result <- try $
-    withChild "term-resistant" directory "probe" $ \child -> do
-      writeIORef observed (Just (childProcess child))
-      assertEqual "TERM-resistant child handshake" "ACTION_STARTED" =<< childLine child
-      throwIO (userError "intentional callback failure")
-  case (result :: Either SomeException ()) of
-    Left _ -> pure ()
-    Right () -> assertBool "cleanup probe callback unexpectedly succeeded" False
-  processHandle <- maybe (throwIO (userError "cleanup probe did not capture child")) pure =<< readIORef observed
-  assertBool "failed callback child was reaped" . maybe False (const True) =<< getProcessExitCode processHandle
+  handshake <- newIORef False
+  let exercise = do
+        result <- try $
+          withChild "term-resistant" directory "probe" $ \child -> do
+            writeIORef observed (Just child)
+            assertEqual "TERM-resistant child handshake" "ACTION_STARTED" =<< childLine child
+            writeIORef handshake True
+            throwIO (userError callbackFailure)
+        case (result :: Either IOException ()) of
+          Left exception -> assertEqual "callback exception" callbackFailure (ioeGetErrorString exception)
+          Right () -> assertBool "cleanup probe callback unexpectedly succeeded" False
+        assertBool "TERM-resistant child completed handshake" =<< readIORef handshake
+        child <- maybe (throwIO (userError "cleanup probe did not capture child")) pure =<< readIORef observed
+        assertBool "failed callback child was reaped" . maybe False (const True) =<< getProcessExitCode (childProcess child)
+        assertBool "failed callback child input was closed" =<< hIsClosed (childInput child)
+        assertBool "failed callback child output was closed" =<< hIsClosed (childOutput child)
+      fallback = readIORef observed >>= mapM_ independentlyReapChild
+  exercise `finally` fallback
+ where
+  callbackFailure = "intentional callback failure"
+
+independentlyReapChild :: Child -> IO ()
+independentlyReapChild child = do
+  ignoreIOException (hClose (childInput child))
+  ignoreIOException (hClose (childOutput child))
+  running <- getProcessExitCode (childProcess child)
+  when (running == Nothing) $ do
+    processId <- getPid (childProcess child)
+    maybe (pure ()) (ignoreIOException . signalProcess sigKILL) processId
+  reaped <- awaitChildExit child 50
+  unless reaped (throwIO (userError "independent child fallback could not reap probe"))
 
 testSerializationCancellation :: IO ()
 testSerializationCancellation = withTestDirectory "serialization-cancel" $ \directory -> do
@@ -298,29 +320,34 @@ spawnChild mode directory identifier = do
   (hSetBuffering inputHandle LineBuffering >> pure child) `onException` cleanupChild child
 
 cleanupChild :: Child -> IO ()
-cleanupChild child = do
-  running <- getProcessExitCode (childProcess child)
-  case running of
-    Just _ -> pure ()
-    Nothing -> do
-      ignoreIO (terminateProcess (childProcess child))
-      terminated <- awaitExit 50
-      when (not terminated) $ do
-        processId <- getPid (childProcess child)
-        maybe (pure ()) (ignoreIO . signalProcess sigKILL) processId
-        _ <- awaitExit 50
-        pure ()
-  ignoreIO (hClose (childInput child))
-  ignoreIO (hClose (childOutput child))
+cleanupChild child =
+  (gracefulCleanup `onException` forceKill) `finally` closePipes
  where
-  ignoreIO action = action `catch` \(_ :: SomeException) -> pure ()
-  awaitExit :: Int -> IO Bool
-  awaitExit 0 = pure False
-  awaitExit attempts = do
-    exited <- getProcessExitCode (childProcess child)
-    case exited of
-      Just _ -> pure True
-      Nothing -> threadDelay 10000 >> awaitExit (attempts - 1)
+  gracefulCleanup = do
+    running <- getProcessExitCode (childProcess child)
+    when (running == Nothing) $ do
+      ignoreIOException (terminateProcess (childProcess child))
+      terminated <- awaitChildExit child 50
+      unless terminated forceKill
+  forceKill = do
+    processId <- getPid (childProcess child)
+    maybe (pure ()) (ignoreIOException . signalProcess sigKILL) processId
+    _ <- awaitChildExit child 50
+    pure ()
+  closePipes = do
+    ignoreIOException (hClose (childInput child))
+    ignoreIOException (hClose (childOutput child))
+
+ignoreIOException :: IO () -> IO ()
+ignoreIOException action = action `catch` \(_ :: IOException) -> pure ()
+
+awaitChildExit :: Child -> Int -> IO Bool
+awaitChildExit _ 0 = pure False
+awaitChildExit child attempts = do
+  exited <- getProcessExitCode (childProcess child)
+  case exited of
+    Just _ -> pure True
+    Nothing -> threadDelay 10000 >> awaitChildExit child (attempts - 1)
 
 childLine :: Child -> IO String
 childLine child = within "child output" (hGetLine (childOutput child))

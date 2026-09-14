@@ -21,6 +21,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Lazy as Lazy
 import Data.Foldable (traverse_)
+import Control.Monad (unless, when)
 import Data.List (nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -110,19 +111,15 @@ validateSnapshot snapshot = do
       , workflowVersion = snapshotWorkflowVersion snapshot
       }
   traverse_ (validateTaskId . recordTaskId) records
-  require (length taskIds == length (nub taskIds)) "snapshot contains duplicate task IDs"
+  unless (length taskIds == length (nub taskIds)) $
+    Left "snapshot contains duplicate task IDs"
   validateHistory records
-  require
-    (not (snapshotCompleted snapshot) || all (isSuccess . recordStatus) records)
-    "completed snapshot contains an unfinished task"
+  when (snapshotCompleted snapshot) $
+    unless (all (isSuccess . recordStatus) records) $
+      Left "completed snapshot contains an unfinished task"
  where
   records = snapshotTasks snapshot
   taskIds = map recordTaskId records
-
-require :: Bool -> Text -> Either Text ()
-require condition message
-  | condition = Right ()
-  | otherwise = Left message
 
 validateHistory :: [TaskRecord] -> Either Text ()
 validateHistory [] = Right ()
@@ -131,8 +128,8 @@ validateHistory (record : rest) = case recordStatus record of
   Running -> requireEnd rest
   Failed _ -> requireEnd rest
  where
-  requireEnd [] = Right ()
-  requireEnd _ = Left "snapshot contains a record after an unfinished task"
+  requireEnd rest = unless (null rest) $
+    Left "snapshot contains a record after an unfinished task"
 
 isSuccess :: TaskStatus -> Bool
 isSuccess (Success _) = True
