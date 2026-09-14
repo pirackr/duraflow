@@ -6,10 +6,10 @@ module ProcessTests
   , processTests
   ) where
 
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, throwTo)
-import Control.Exception (AsyncException (ThreadKilled), SomeException, throwIO, try)
+import Control.Concurrent (MVar, forkIO, newEmptyMVar, putMVar, takeMVar, throwTo)
+import Control.Exception (AsyncException (ThreadKilled), SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (forM_, when)
-import Data.Aeson (toJSON)
+import Data.Aeson (ToJSON (toJSON), Value (Null))
 import qualified Data.ByteString as ByteString
 import Data.IORef
 import qualified Data.Text as Text
@@ -22,6 +22,7 @@ import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), Handle, hFlush, hGetLine, hPutStrLn, hSetBuffering, stdout)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process
   ( CreateProcess (std_in, std_out)
   , ProcessHandle
@@ -35,8 +36,9 @@ import TestSupport
 
 processTests :: IO ()
 processTests = do
-  runCase "process locks reject same ID and allow different IDs" testProcessLocks
+  runCase "process locks reject same ID before serializing workflow input" testProcessLocks
   runCase "killed Running task resumes and keeps complete canonical JSON" testKilledResume
+  runCase "workflow input serialization remains cancellable and releases lock" testSerializationCancellation
   runCase "asynchronous cancellation releases lock and is not saved Failed" testCancellation
   runCase "injected Running commits gate actions at every phase" testRunningCommitFailures
   runCase "injected Success commits gate dependent actions at every phase" testSuccessCommitFailures
@@ -81,6 +83,17 @@ testProcessLocks = withTestDirectory "process-locks" $ \directory -> do
   contender <- spawnChild "attempt" directory "shared"
   assertEqual "same execution reports busy" "BUSY" =<< childLine contender
   assertEqual "busy child exits" ExitSuccess =<< childExit contender
+  actions <- newIORef (0 :: Int)
+  let sharedConfig = RunConfig directory (ExecutionId "shared") "process-workflow" "1"
+  encodedContender <- try $
+    runWorkflow sharedConfig ThrowingWorkflowInput $ \_ ->
+      task (TaskId "must-not-run") () (\() -> modifyIORef' actions (+ 1))
+  case (encodedContender :: Either SomeException ()) of
+    Left exception -> case fromException exception of
+      Just ExecutionBusy {} -> pure ()
+      _ -> assertBool ("held-lock contender evaluated workflow input: " <> displayException exception) False
+    Right () -> assertBool "held-lock contender unexpectedly succeeded" False
+  assertEqual "held-lock contender action count" 0 =<< readIORef actions
   independent <- spawnChild "attempt" directory "independent"
   assertEqual "different execution action starts" "ACTION_STARTED" =<< childLine independent
   assertEqual "different execution completes" "DONE" =<< childLine independent
@@ -106,6 +119,48 @@ testKilledResume = withTestDirectory "process-kill" $ \directory -> do
     _ <- task (TaskId "one") () (\() -> appendFile effects "one\n")
     task (TaskId "two") () (\() -> appendFile effects "two\n")
   assertEqual "completed task skipped and Running task repeated" ["one", "two", "two"] . lines =<< readFile effects
+
+testSerializationCancellation :: IO ()
+testSerializationCancellation = withTestDirectory "serialization-cancel" $ \directory -> do
+  started <- newEmptyMVar
+  blocked <- newEmptyMVar
+  finished <- newEmptyMVar
+  actions <- newIORef (0 :: Int)
+  let config = RunConfig directory (ExecutionId "serialization-cancelled") "process-workflow" "1"
+      input = BlockingWorkflowInput started blocked
+      flow _ = task (TaskId "must-not-run") () (\() -> modifyIORef' actions (+ 1))
+  thread <- forkIO $ do
+    result <- try (runWorkflow config input flow) :: IO (Either SomeException ())
+    putMVar finished result
+  within "workflow input serialization starts" (takeMVar started)
+  contender <- spawnChild "attempt" directory "serialization-cancelled"
+  assertEqual "serialization holds execution lock" "BUSY" =<< childLine contender
+  assertEqual "serialization contender exits" ExitSuccess =<< childExit contender
+  within "serialization cancellation delivery" (throwTo thread ThreadKilled)
+  result <- within "cancelled serialization exits" (takeMVar finished)
+  case result of
+    Left exception -> assertBool "serialization propagates ThreadKilled" (show exception == "thread killed")
+    Right () -> assertBool "cancelled serialization unexpectedly succeeded" False
+  assertEqual "action does not run during input serialization" 0 =<< readIORef actions
+  _ <- runWorkflow config () (\() -> task (TaskId "after-cancel") () (\() -> modifyIORef' actions (+ 1)))
+  assertEqual "serialization cancellation releases lock" 1 =<< readIORef actions
+
+data ThrowingWorkflowInput = ThrowingWorkflowInput
+
+data BlockingWorkflowInput = BlockingWorkflowInput (MVar ()) (MVar ())
+
+instance ToJSON ThrowingWorkflowInput where
+  toJSON _ = error "workflow input encoder ran before busy arbitration"
+
+instance ToJSON BlockingWorkflowInput where
+  toJSON = blockingWorkflowInputJSON
+
+blockingWorkflowInputJSON :: BlockingWorkflowInput -> Value
+blockingWorkflowInputJSON (BlockingWorkflowInput started blocked) = unsafePerformIO $ do
+  putMVar started ()
+  takeMVar blocked
+  pure Null
+{-# NOINLINE blockingWorkflowInputJSON #-}
 
 testCancellation :: IO ()
 testCancellation = withTestDirectory "runtime-cancel" $ \directory -> do

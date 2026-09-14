@@ -74,9 +74,9 @@ runWorkflowWith
   -> input
   -> (input -> Workflow output)
   -> IO output
-runWorkflowWith operations suppliedConfig input orchestration = do
-  encodedInput <- forceJSON input
+runWorkflowWith operations suppliedConfig input orchestration =
   withExecutionStore operations suppliedConfig $ \store -> mask $ \restore -> do
+    encodedInput <- restore (forceJSON input)
     initial <- initializeExecution store encodedInput
     stateReference <- newIORef RuntimeState
       { currentSnapshot = initial
