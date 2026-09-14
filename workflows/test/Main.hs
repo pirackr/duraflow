@@ -25,6 +25,7 @@ import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
 import Data.Either (isLeft)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -902,10 +903,22 @@ assertCliResult state execution expectedDiagnostic (CliResult exitCode stdoutTex
   assertBool "CLI exits nonzero" (exitCode /= ExitSuccess)
   assertEqual "CLI stdout is empty" "" stdoutText
   let expectedLine = "user error (" <> expectedDiagnostic <> ")"
-  assertBool ("CLI exact application diagnostic: " <> expectedDiagnostic)
-    (expectedLine `elem` lines stderrText)
+  assertEqual ("CLI exact application diagnostic: " <> expectedDiagnostic)
+    [expectedLine]
+    (normalizeRunghcStderr stderrText)
   snapshotExists <- doesFileExist (state </> execution <> ".json")
   assertEqual "CLI does not create a snapshot" False snapshotExists
+
+normalizeRunghcStderr :: String -> [String]
+normalizeRunghcStderr = filter (not . wrapperNoise) . lines
+ where
+  wrapperNoise line =
+    null line
+      || line == "Warning: No latest package revision found for aeson, dependency callstack:"
+      || line == "HasCallStack backtrace:"
+      || isBacktraceFrame line
+  isBacktraceFrame line =
+    take 2 line == "  " && ", called at " `isInfixOf` line
 
 -- Local test support
 

@@ -171,7 +171,7 @@ forecastParser request url timestamp = withObject "forecast response" $ \object 
     offset <- object .: "utc_offset_seconds"
     units <- object .: "daily_units"
     daily <- object .: "daily"
-    either (fail . Text.unpack . Text.intercalate "\n") pure $
+    parseValidation $
         validate () $
             [ (offset == (0 :: Int), "UTC offset must be zero")
             ]
@@ -193,7 +193,7 @@ parseDaily request url timestamp latitude longitude units daily = do
     rains <- daily .: "precipitation_probability_max"
     winds <- daily .: "wind_speed_10m_max"
     uvs <- daily .: "uv_index_max"
-    either (fail . Text.unpack . Text.intercalate "\n") pure $ do
+    parseValidation $ do
         validateUnits [timeU, minU, maxU, rainU, windU, uvU]
         let lengths = [length dates, length mins, length maxs, length rains, length winds, length uvs]
         validate ()
@@ -249,19 +249,24 @@ validateDailyRows rows =
 
 validateDailyRow :: DailyMetrics -> Either [Text] DailyMetrics
 validateDailyRow metrics = validate metrics
-    [ (finite temperature.minimum, "forecast metric must be finite")
-    , (finite temperature.maximum, "forecast metric must be finite")
-    , (finite metrics.rain, "forecast metric must be finite")
-    , (finite metrics.wind, "forecast metric must be finite")
-    , (finite metrics.uv, "forecast metric must be finite")
+    [ (minimumFinite, "forecast metric must be finite")
+    , (maximumFinite, "forecast metric must be finite")
+    , (rainFinite, "forecast metric must be finite")
+    , (windFinite, "forecast metric must be finite")
+    , (uvFinite, "forecast metric must be finite")
     , (not temperaturesFinite || temperature.maximum >= temperature.minimum, "minimum temperature exceeds maximum temperature")
-    , (not (finite metrics.rain) || metrics.rain >= 0 && metrics.rain <= 100, "rain probability is outside 0 through 100")
-    , (not (finite metrics.wind) || metrics.wind >= 0, "wind speed is negative")
-    , (not (finite metrics.uv) || metrics.uv >= 0, "UV index is negative")
+    , (not rainFinite || metrics.rain >= 0 && metrics.rain <= 100, "rain probability is outside 0 through 100")
+    , (not windFinite || metrics.wind >= 0, "wind speed is negative")
+    , (not uvFinite || metrics.uv >= 0, "UV index is negative")
     ]
   where
     temperature = metrics.temperature
-    temperaturesFinite = finite temperature.minimum && finite temperature.maximum
+    minimumFinite = finite temperature.minimum
+    maximumFinite = finite temperature.maximum
+    rainFinite = finite metrics.rain
+    windFinite = finite metrics.wind
+    uvFinite = finite metrics.uv
+    temperaturesFinite = minimumFinite && maximumFinite
 
 validateCoordinates :: Text -> Double -> Double -> Either [Text] ()
 validateCoordinates label latitude longitude =
@@ -287,16 +292,25 @@ validateUnits actual = validate ()
     labels = ["time", "minimum temperature", "maximum temperature", "precipitation probability", "wind speed", "UV index"]
     expected = ["iso8601", "°C", "°C", "%", "km/h", ""]
 
+validationMessage :: [Text] -> Text
+validationMessage = Text.intercalate "\n"
+
+parseValidation :: Either [Text] value -> Parser value
+parseValidation = either (fail . Text.unpack . validationMessage) pure
+
 firstText :: Either String value -> Either Text value
 firstText = either (Left . Text.pack) Right
+
+-- Parsing and forcing precede clock sampling. This value is always replaced before return.
+validationTimestamp :: UTCTime
+validationTimestamp = UTCTime (fromGregorian 1858 11 17) 0
 
 fetchForecastWith :: Int -> (Text -> IO (Int, ByteString.ByteString)) -> IO UTCTime -> WeatherRequest -> IO Forecast
 fetchForecastWith deadline transport clock request = do
     completed <- timeout deadline $ do
         (status, bytes) <- transport url
         unless (status >= 200 && status < 300) $ ioError (userError ("forecast request returned HTTP status " <> show status))
-        let dummyTimestamp = UTCTime (fromGregorian 1858 11 17) 0
-        parsed <- either (ioError . userError . Text.unpack) pure (parseForecast request url dummyTimestamp bytes)
+        parsed <- either (ioError . userError . Text.unpack) pure (parseForecast request url validationTimestamp bytes)
         validated <- evaluate (force parsed)
         timestamp <- clock
         evaluate (force validated{retrievedAt = timestamp})
@@ -320,10 +334,10 @@ prepareAdvice forecast = Checklist forecast (if null advice then ["No additional
     advice =
         [ item
         | (applies, item) <-
-            [ (rainProbability forecast >= 50, "Bring rain protection.")
-            , (minimumTemperature forecast <= 5, "Bring warm layers.")
-            , (maximumWindSpeed forecast >= 40, "Secure loose outdoor items and prepare for wind.")
-            , (maximumUvIndex forecast >= 3, "Use sun protection.")
+            [ (forecast.rainProbability >= 50, "Bring rain protection.")
+            , (forecast.minimumTemperature <= 5, "Bring warm layers.")
+            , (forecast.maximumWindSpeed >= 40, "Secure loose outdoor items and prepare for wind.")
+            , (forecast.maximumUvIndex >= 3, "Use sun protection.")
             ]
         , applies
         ]
@@ -332,23 +346,23 @@ renderChecklist :: Checklist -> Text
 renderChecklist Checklist{checklistForecast = forecast, checklistItems} =
     Text.unlines
         ( [ "Weather preparation checklist"
-          , "Forecast date (" <> timeUnit units <> "): " <> showText (forecastDate request)
-          , "Requested coordinates: latitude " <> showText (requestedLatitude request) <> ", longitude " <> showText (requestedLongitude request)
-          , "Provider coordinates: latitude " <> showText (providerLatitude forecast) <> ", longitude " <> showText (providerLongitude forecast)
-          , "Provider: " <> provider forecast
-          , "Retrieved at: " <> Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (retrievedAt forecast))
-          , metric "Minimum temperature" (minimumTemperature forecast) (temperatureUnit units)
-          , metric "Maximum temperature" (maximumTemperature forecast) (temperatureUnit units)
-          , metric "Rain probability" (rainProbability forecast) (precipitationUnit units)
-          , metric "Maximum wind speed" (maximumWindSpeed forecast) (windUnit units)
-          , metric "Maximum UV index" (maximumUvIndex forecast) (uvUnit units)
+          , "Forecast date (" <> units.timeUnit <> "): " <> showText request.forecastDate
+          , "Requested coordinates: latitude " <> showText request.requestedLatitude <> ", longitude " <> showText request.requestedLongitude
+          , "Provider coordinates: latitude " <> showText forecast.providerLatitude <> ", longitude " <> showText forecast.providerLongitude
+          , "Provider: " <> forecast.provider
+          , "Retrieved at: " <> Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" forecast.retrievedAt)
+          , metric "Minimum temperature" forecast.minimumTemperature units.temperatureUnit
+          , metric "Maximum temperature" forecast.maximumTemperature units.temperatureUnit
+          , metric "Rain probability" forecast.rainProbability units.precipitationUnit
+          , metric "Maximum wind speed" forecast.maximumWindSpeed units.windUnit
+          , metric "Maximum UV index" forecast.maximumUvIndex units.uvUnit
           , "Preparation:"
           ]
             <> map ("- " <>) checklistItems
         )
   where
-    request = forecastRequest forecast
-    units = forecastUnits forecast
+    request = forecast.forecastRequest
+    units = forecast.forecastUnits
     metric label value unit = label <> ": " <> showText value <> if Text.null unit then "" else " " <> unit
 
 writeChecklist :: (FilePath, Checklist) -> IO FilePath
@@ -372,7 +386,7 @@ normalizeInvocation :: (FilePath, ExecutionId, WeatherRequest) -> IO (RunConfig,
 normalizeInvocation (state, execution, request) = do
     requireDirectory "state directory" state
     canonicalState <- canonicalizePath state
-    let suppliedOutput = outputPath request
+    let suppliedOutput = request.outputPath
         outputName = takeFileName suppliedOutput
         suppliedParent = takeDirectory suppliedOutput
     when (null outputName || outputName == "." || outputName == "..") $ ioError (userError "output file must have a filename")
@@ -384,25 +398,39 @@ normalizeInvocation (state, execution, request) = do
     pure (RunConfig canonicalState execution weatherWorkflowName weatherWorkflowVersion, request{outputPath = absoluteOutput})
 
 parseCoordinate :: Text -> Double -> Double -> String -> Either Text Double
-parseCoordinate label lower upper input = case readMaybe input of
-    Nothing -> Left (label <> " must be a number")
-    Just value -> joinValidationErrors $ validate value
-        [ (finite value, label <> " must be finite")
-        , (not (finite value) || value >= lower && value <= upper, label <> " is outside its geographic range")
-        ]
+parseCoordinate label lower upper input =
+    case readMaybe input of
+        Nothing -> Left (label <> " must be a number")
+        Just value ->
+            joinValidationErrors $
+                validate value
+                    [ (finite value, label <> " must be finite")
+                    , (not (finite value) || value >= lower && value <= upper, label <> " is outside its geographic range")
+                    ]
 
 joinValidationErrors :: Either [Text] value -> Either Text value
-joinValidationErrors = either (Left . Text.intercalate "\n") Right
+joinValidationErrors = either (Left . validationMessage) Right
+
 parseDate :: String -> Either Text Day
 parseDate input = case parseTimeM True defaultTimeLocale "%F" input of
     Nothing -> Left "forecast date must be a valid YYYY-MM-DD calendar date"
     Just day
         | formatTime defaultTimeLocale "%F" day /= input -> Left "forecast date must use canonical YYYY-MM-DD form"
         | otherwise -> Right day
+
 requireDirectory :: String -> FilePath -> IO ()
-requireDirectory label path = doesDirectoryExist path >>= \exists -> unless exists (ioError (userError (label <> " does not exist or is not a directory")))
+requireDirectory label path = do
+    exists <- doesDirectoryExist path
+    unless exists $
+        ioError (userError (label <> " does not exist or is not a directory"))
+
 sameOrInside :: FilePath -> FilePath -> Bool
-sameOrInside parent candidate = let parts = splitDirectories (normalise parent) in parts == take (length parts) (splitDirectories (normalise candidate))
+sameOrInside parent candidate =
+    parentParts == take (length parentParts) candidateParts
+  where
+    parentParts = splitDirectories (normalise parent)
+    candidateParts = splitDirectories (normalise candidate)
+
 validateOutputEntry :: FilePath -> IO ()
 validateOutputEntry path = do
     result <- (Right <$> getSymbolicLinkStatus path) `catch` missing
