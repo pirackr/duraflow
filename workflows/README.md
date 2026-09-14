@@ -87,14 +87,14 @@ behavior.
 
 ## Offline tests
 
-From any working directory, the wrappers locate the repository themselves:
+From any working directory, the single current wrapper locates the repository
+itself:
 
 ```sh
 nix develop --no-write-lock-file --command bash scripts/test-weather.sh
-nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
 ```
 
-The first runs fixture, rule, writer, replay, repeated-effect, and CLI unit tests.
-The second launches the example from an unrelated temporary source directory
-with absolute Stack and module paths and verifies validation failures. Neither
-uses credentials nor sends a forecast request.
+It runs the consolidated `workflows/test/Main.hs` suite: fixture, rule, writer,
+replay, repeated-effect, and CLI unit tests, plus subprocess checks that launch
+the example from an unrelated temporary directory with absolute Stack, source,
+and module paths. The suite uses no credentials and sends no forecast request.

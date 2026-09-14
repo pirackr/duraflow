@@ -19,11 +19,12 @@ nix develop --no-write-lock-file
 stack build --test --no-run-tests http-client http-client-tls duraflow
 stack test
 bash scripts/test-weather.sh
-bash scripts/test-weather-cli.sh
 ```
 
-All automated tests are offline. They use injected HTTP fixtures and never call
-the live forecast service.
+All automated tests are offline. The single weather runner executes the
+consolidated `workflows/test/Main.hs` suite, including real CLI subprocess
+validation. Tests use injected HTTP fixtures and never call the live forecast
+service.
 
 ## Weather example
 

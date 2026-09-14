@@ -394,6 +394,17 @@ lines shorter than the original aggregate. The extracted helper is reported
 separately rather than counted as deleted code; together these production files
 are 527 lines, a genuine structural reduction of 123 lines.
 
+## Current test layout follow-up
+
+A later test-only cleanup consolidates every weather application test and local
+helper into readable sections in `workflows/test/Main.hs`. The same suite now
+runs the nine real CLI subprocess validation scenarios and the independent
+compiler-startup false-positive guard. `scripts/test-weather.sh` is the single
+current offline runner, and CI invokes it once. The older split Haskell test
+modules and `scripts/test-weather-cli.sh` are superseded; historical commands
+above document the original implementation sequence rather than the current
+layout.
+
 ## Final review and PR handoff
 
 Verify the original checkout index and pending files remain untouched. Record test results and any limitations in the PR body. Push only `feat/weather-workflow-mvp` using GitHub CLI authentication, then create a PR with `gh pr create --base main --head feat/weather-workflow-mvp`; never push directly to main or merge. Include the spec and plan links, dependency pin, core and weather checks, durability limitations, and a statement that no live forecast smoke test was run. The user requested execution and a PR, so do not pause for another execution-choice prompt.

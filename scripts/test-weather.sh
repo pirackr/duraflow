@@ -10,5 +10,6 @@ stack runghc \
   --package aeson \
   --package http-client \
   --package http-client-tls \
+  --package process \
   --package time \
   -- -iworkflows -iworkflows/test workflows/test/Main.hs

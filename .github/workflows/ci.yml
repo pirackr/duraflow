@@ -48,8 +48,5 @@ jobs:
       - name: Run core tests
         run: nix develop --no-write-lock-file --command stack test
 
-      - name: Run offline weather tests
+      - name: Run unified offline weather tests
         run: nix develop --no-write-lock-file --command bash scripts/test-weather.sh
-
-      - name: Verify standalone source location and CLI validation
-        run: nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
