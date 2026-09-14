@@ -2,9 +2,9 @@
 .lean-ctx.toml
 
 # Haskell build artifacts and local Cabal overrides
-/dist-newstyle/
-/dist/
-/.stack-work/
+dist-newstyle/
+dist/
+.stack-work/
 cabal.project.local
 cabal.project.local~
 *.hi

@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$repository_root"
 
-stack runghc \
+exec stack runghc \
   --package duraflow \
   --package aeson \
   --package http-client \
