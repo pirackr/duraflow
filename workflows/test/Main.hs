@@ -88,6 +88,7 @@ runForecastTests = do
   runCase "forecast rejects malformed and structurally invalid responses" structuralFailures
   runCase "forecast rejects every invalid unit" unitFailures
   runCase "forecast rejects invalid coordinates and metrics" valueFailures
+  runCase "forecast reports independent metric failures in rule order" aggregateMetricFailures
   runCase "forecast transport status, deadline, clock, and cancellation" transportFailures
   runCase "checklist writer safely replaces real files" writerCases
 
@@ -183,6 +184,24 @@ valueFailures = do
         , request {requestedLongitude = -180.01}
         ]
   forM_ invalidRequests $ \invalid -> assertLeft "invalid request coordinates" (parseForecast invalid (forecastUrl invalid) timestamp bytes)
+
+aggregateMetricFailures :: IO ()
+aggregateMetricFailures = do
+  bytes <- readFixture
+  let invalid =
+        replace "[2.0, 3.2]" "[2.0, -1]"
+          . replace "[12.4, 41.0]" "[12.4, -1]"
+          . replace "[20, 60]" "[20, 101]"
+          . replace "[11.2, 5.0]" "[11.2, 18]"
+          $ bytes
+      expected = Left (Text.intercalate "\n"
+        [ "Error in $: minimum temperature exceeds maximum temperature"
+        , "rain probability is outside 0 through 100"
+        , "wind speed is negative"
+        , "UV index is negative"
+        ])
+  assertEqual "aggregate metric diagnostics" expected
+    (parseForecast request (forecastUrl request) timestamp invalid)
 
 transportFailures :: IO ()
 transportFailures = do
