@@ -246,11 +246,11 @@ decodeSavedOutput eid position taskId encodedOutput = do
   decoded <- evaluate (fromJSON encodedOutput) `catch` decodeException
   case decoded of
     Aeson.Error message -> replayFailure (Text.pack message)
-    Aeson.Success output -> pure output
+    Aeson.Success output -> evaluate output `catch` decodeException
  where
   replayFailure message =
     throwIO (ReplayMismatch eid position (Just taskId) ("saved task output cannot be decoded: " <> message))
-  decodeException :: SomeException -> IO (Aeson.Result output)
+  decodeException :: SomeException -> IO value
   decodeException exception = case fromException exception :: Maybe SomeAsyncException of
     Just _ -> throwIO exception
     Nothing -> replayFailure (Text.pack (displayException exception))

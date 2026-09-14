@@ -118,7 +118,7 @@ testCancellation = withTestDirectory "runtime-cancel" $ \directory -> do
     result <- try (runWorkflow config () flow) :: IO (Either SomeException ())
     putMVar finished result
   within "cancel action starts" (takeMVar started)
-  throwTo thread ThreadKilled
+  within "cancel exception delivery" (throwTo thread ThreadKilled)
   result <- within "cancel invocation exits" (takeMVar finished)
   case result of
     Left exception -> assertBool "ThreadKilled propagates" (show exception == "thread killed")

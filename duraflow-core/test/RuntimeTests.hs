@@ -2,7 +2,7 @@
 
 module RuntimeTests (runtimeTests) where
 
-import Control.Exception (SomeException, displayException, fromException, throwIO, try)
+import Control.Exception (SomeException, displayException, evaluate, fromException, throwIO, try)
 import Data.Aeson
   ( FromJSON (parseJSON)
   , ToJSON (toJSON)
@@ -27,6 +27,7 @@ runtimeTests = do
   runCase "invalid and duplicate invocation task IDs run no duplicate action" testInvocationIds
   runCase "corrupt, unknown, and invalid snapshots run no actions" testInvalidSnapshots
   runCase "undecodable saved success runs no action" testUndecodableSuccess
+  runCase "lazy decoder exceptions are replay mismatches" testLazyDecoderException
   runCase "completed histories reject appended tasks" testCompletedAppend
   runCase "normal shortened orchestration is rejected" testShortenedWorkflow
   runCase "orchestration exceptions are not replaced by replay validation" testOrchestrationException
@@ -146,6 +147,17 @@ testUndecodableSuccess = withTestDirectory "runtime-decode" $ \directory -> do
     runWorkflow config () (\() -> task (TaskId "one") () (\() -> modifyIORef' calls (+ 1) >> pure True))
   assertEqual "undecodable action count" 0 =<< readIORef calls
 
+testLazyDecoderException :: IO ()
+testLazyDecoderException = withTestDirectory "runtime-lazy-decode" $ \directory -> do
+  let config = testConfig directory "lazy-decode"
+  _ <- runWorkflow config () (\() -> task (TaskId "one") () (\() -> pure (1 :: Int)))
+  calls <- newIORef (0 :: Int)
+  assertErrorCategory "lazy decoder exception" isReplayMismatch $
+    runWorkflow config ()
+      (\() -> task (TaskId "one") () (\() -> modifyIORef' calls (+ 1) >> pure LazyDecoded))
+      >>= evaluate
+  assertEqual "lazy decoder action count" 0 =<< readIORef calls
+
 testCompletedAppend :: IO ()
 testCompletedAppend = withTestDirectory "runtime-completed-append" $ \directory -> do
   let config = testConfig directory "completed-append"
@@ -234,6 +246,7 @@ testOutputEncodingFailure = withTestDirectory "runtime-output-encoding" $ \direc
 newtype NoJSON = NoJSON Int deriving (Eq, Show)
 data BadInput = BadInput deriving (Eq, Show)
 data BadOutput = BadOutput deriving (Eq, Show)
+data LazyDecoded = LazyDecoded deriving (Eq, Show)
 
 instance ToJSON BadInput where
   toJSON _ = error "bad input encoder"
@@ -243,6 +256,12 @@ instance ToJSON BadOutput where
 
 instance FromJSON BadOutput where
   parseJSON _ = pure BadOutput
+
+instance ToJSON LazyDecoded where
+  toJSON _ = object []
+
+instance FromJSON LazyDecoded where
+  parseJSON _ = pure (error "lazy decoder exploded")
 
 assertTaskFailure :: String -> Either DuraflowError a -> IO ()
 assertTaskFailure _ (Left (TaskFailure _ _ _ _)) = pure ()
