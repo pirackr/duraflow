@@ -9,7 +9,7 @@ import Control.Monad (forM_)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -184,12 +184,16 @@ workflowResume = withTestDirectory "resume" $ \directory -> do
   fetches <- newIORef (0 :: Int)
   writes <- newIORef (0 :: Int)
   let effects = WeatherEffects
-        { getForecast = \_ -> writeIORef fetches 1 >> pure source
+        { getForecast = \_ -> modifyIORef' fetches (+ 1) >> pure source
         , putChecklist = \input -> do
             count <- readIORef writes
             writeIORef writes (count + 1)
             if count == 0 then fail "injected writer failure" else writeChecklist input
         }
+  _ <- getForecast effects workflowRequest
+  _ <- getForecast effects workflowRequest
+  assertEqual "fetch spy counts every invocation" 2 =<< readIORef fetches
+  writeIORef fetches 0
   assertThrows "first workflow fails at writer" (runWorkflow config workflowRequest (weatherPreparationWith effects))
   assertEqual "one fetch before resume" 1 =<< readIORef fetches
   result <- runWorkflow config workflowRequest (weatherPreparationWith effects)
