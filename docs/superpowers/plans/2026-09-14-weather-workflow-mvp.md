@@ -366,7 +366,7 @@ nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
   run: nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
 ```
 
-- [ ] Step 6. Execute those exact CI commands locally, run `git diff --check`, self-review the public API and all spec acceptance bullets, and commit. Then perform a broad independent branch review, fix its findings with regression tests, rerun affected suites and one final complete verification.
+- [x] Step 6. Execute those exact CI commands locally, run `git diff --check`, self-review the public API and all spec acceptance bullets, and commit. Then perform a broad independent branch review, fix its findings with regression tests, rerun affected suites and one final complete verification.
 
 ```sh
 git diff --check
@@ -377,3 +377,17 @@ git commit -m "feat: ship weather CLI with replay integration tests and CI"
 ## Final review and PR handoff
 
 Verify the original checkout index and pending files remain untouched. Record test results and any limitations in the PR body. Push only `feat/weather-workflow-mvp` using GitHub CLI authentication, then create a PR with `gh pr create --base main --head feat/weather-workflow-mvp`; never push directly to main or merge. Include the spec and plan links, dependency pin, core and weather checks, durability limitations, and a statement that no live forecast smoke test was run. The user requested execution and a PR, so do not pause for another execution-choice prompt.
+
+## Execution and verification record
+
+All five implementation tasks completed in the isolated feature worktree based on `origin/main` at `3c8871a`. Each task passed independent specification and quality review. Whole-branch review and the final scoped fix review approved the implementation through `a9b8944`, with no outstanding Critical, Important, or deferred findings.
+
+Review-driven regressions cover lazy cached decode failures, broad asynchronous CLI cancellation, lock arbitration before workflow-input encoding, interruptible serialization with lock release, and CLI test rejection of compiler/startup failures. Internal core modules remain hidden from consumers.
+
+Final controller verification reran every CI-equivalent command above successfully. Counts were measured from the actual successful test output: **41 core test groups**, **16 offline weather test groups**, and **9 standalone invalid CLI scenarios**, plus the wrapper's compiler-failure regression. The fix worker's earlier count of 42 core groups double-counted an extended existing case; 41 is the verified total.
+
+Both the application test entrypoint and runnable example also passed `ghc -Wall -Werror -fno-code` using the pinned environment and explicit application packages. `git diff --check` passed. Stack's informational Aeson package-revision warning does not represent a GHC source warning or an unpinned dependency.
+
+The original checkout's staged files and pending `.gitignore` change were preserved. The accidentally committed scratch report was removed from the final tracked diff. The feature worktree remains available for PR feedback.
+
+No live Open-Meteo smoke test was run. Tests exercise Linux local-filesystem operations, injected failures, process termination, and replay; they do not certify physical power-loss behavior. External effects remain at-least-once, and replay of a committed checklist write intentionally does not recreate an externally removed artifact.
