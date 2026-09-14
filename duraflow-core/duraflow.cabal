@@ -19,7 +19,8 @@ library
   exposed-modules:
       Duraflow
   other-modules:
-      Duraflow.Internal.Runtime
+      Duraflow.Internal.DurableFile
+    , Duraflow.Internal.Runtime
     , Duraflow.Internal.Snapshot
     , Duraflow.Internal.Storage
     , Duraflow.Internal.Types
@@ -40,6 +41,8 @@ test-suite duraflow-test
   main-is:          Main.hs
   other-modules:
       Duraflow
+    , DurableFileTests
+    , Duraflow.Internal.DurableFile
     , Duraflow.Internal.Runtime
     , Duraflow.Internal.Snapshot
     , Duraflow.Internal.Storage

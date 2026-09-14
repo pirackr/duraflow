@@ -1,5 +1,6 @@
 module Main (main) where
 
+import DurableFileTests (durableFileTests)
 import ProcessTests (childMain, processTests)
 import RuntimeTests (runtimeTests)
 import SnapshotTests (snapshotTests)
@@ -11,5 +12,5 @@ main = do
   arguments <- getArgs
   case arguments of
     "--child" : childArguments -> childMain childArguments
-    [] -> snapshotTests >> storageTests >> runtimeTests >> processTests
+    [] -> durableFileTests >> snapshotTests >> storageTests >> runtimeTests >> processTests
     _ -> fail "unexpected test arguments"

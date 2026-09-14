@@ -19,7 +19,13 @@ task
   -> Workflow output
 ```
 
-It also exports `ExecutionId`, `TaskId`, `RunConfig`, `DuraflowError`, and the
+It also exports `writeFileDurably :: FilePath -> ByteString -> IO ()` for strict
+bytes. The caller provisions the parent directory; the writer privately creates,
+fully writes and synchronizes a temporary file, revalidates the target, atomically
+replaces it, and synchronizes the parent. Symlink and nonregular targets are
+rejected.
+
+The module exports `ExecutionId`, `TaskId`, `RunConfig`, `DuraflowError`, and the
 abstract sequential `Workflow` type. The core has no weather dependency and
 does not scan, register, or discover application workflows.
 
