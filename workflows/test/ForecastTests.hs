@@ -6,7 +6,7 @@ module ForecastTests (runForecastTests) where
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Exception (AsyncException (ThreadKilled), SomeException, fromException, try)
 import Control.Monad (forM_)
-import Data.Aeson (eitherDecode, encode)
+import Data.Aeson (eitherDecode, eitherDecodeStrict', encode)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
 import Data.IORef (newIORef, readIORef, writeIORef)
@@ -18,12 +18,12 @@ import System.Directory (createDirectory, createFileLink)
 import System.FilePath ((</>))
 import System.Posix.Files (ownerExecuteMode, ownerReadMode, ownerWriteMode, setFileMode, unionFileModes)
 import TestSupport
-import Weather
-import Weather.Forecast (fetchForecastWith, forecastUrl, parseForecast)
+import WeatherWorkflow
 
 runForecastTests :: IO ()
 runForecastTests = do
   runCase "forecast parses requested row and round-trips" parsingRoundTrip
+  runCase "legacy saved forecast JSON remains replay-decodable" legacyForecastJson
   runCase "forecast rejects malformed and structurally invalid responses" structuralFailures
   runCase "forecast rejects every invalid unit" unitFailures
   runCase "forecast rejects invalid coordinates and metrics" valueFailures
@@ -57,6 +57,18 @@ parsingRoundTrip = do
   assertEqual "timestamp" timestamp (retrievedAt forecast)
   assertEqual "forecast JSON round trip" (Right forecast) (eitherDecode (encode forecast))
   assertEqual "request JSON round trip" (Right request) (eitherDecode (encode request))
+
+legacyForecastJson :: IO ()
+legacyForecastJson = do
+  let legacy :: Text
+      legacy = "{\"forecastRequest\":{\"forecastDate\":\"2026-09-15\",\"outputPath\":\"/tmp/checklist.txt\",\"requestedLatitude\":47.6062,\"requestedLongitude\":-122.3321},\"forecastUnits\":{\"precipitationUnit\":\"%\",\"temperatureUnit\":\"°C\",\"timeUnit\":\"iso8601\",\"uvUnit\":\"\",\"windUnit\":\"km/h\"},\"maximumTemperature\":17.5,\"maximumUvIndex\":3.2,\"maximumWindSpeed\":41,\"minimumTemperature\":5,\"provider\":\"Open-Meteo\",\"providerLatitude\":47.625,\"providerLongitude\":-122.375,\"rainProbability\":60,\"requestUrl\":\"legacy-url\",\"retrievedAt\":\"2026-09-14T12:34:56Z\"}"
+      decoded = eitherDecodeStrict' (TextEncoding.encodeUtf8 legacy) :: Either String Forecast
+  forecast <- either fail pure decoded
+  assertEqual "legacy task output fields" ("legacy-url", timestamp, request)
+    (requestUrl forecast, retrievedAt forecast, forecastRequest forecast)
+  assertEqual "legacy output drives deterministic replay computation"
+    ["Bring rain protection.", "Bring warm layers.", "Secure loose outdoor items and prepare for wind.", "Use sun protection."]
+    (checklistItems (prepareAdvice forecast))
 
 structuralFailures :: IO ()
 structuralFailures = do

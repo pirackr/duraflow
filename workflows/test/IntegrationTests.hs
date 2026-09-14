@@ -15,8 +15,7 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist, removeFile)
 import System.FilePath ((</>))
 import TestSupport
-import Weather
-import Weather.Forecast (forecastUrl, parseForecast)
+import WeatherWorkflow
 
 runIntegrationTests :: IO ()
 runIntegrationTests = do

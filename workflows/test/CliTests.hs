@@ -23,9 +23,7 @@ import System.Directory
   )
 import System.FilePath ((</>))
 import TestSupport
-import Weather (WeatherRequest (..))
-import Weather.Cli (normalizeInvocation, parseArguments)
-import Weather.Cli.Internal (handleTopLevelErrors)
+import WeatherWorkflow
 
 runCliTests :: IO ()
 runCliTests = do

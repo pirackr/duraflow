@@ -8,7 +8,7 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as Text
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import TestSupport
-import Weather
+import WeatherWorkflow
 
 runAdviceTests :: IO ()
 runAdviceTests = do

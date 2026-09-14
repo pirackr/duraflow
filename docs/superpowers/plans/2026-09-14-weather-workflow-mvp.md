@@ -374,6 +374,19 @@ git add workflows scripts README.md duraflow-core/README.md .github/workflows/ci
 git commit -m "feat: ship weather CLI with replay integration tests and CI"
 ```
 
+## Approved single-file follow-up
+
+A later approved follow-up supersedes the application module layout above without
+changing behavior or serialized values. All weather-specific implementation now
+lives in runnable `workflows/WeatherWorkflow.hs`, module `WeatherWorkflow`, while
+tests remain separate with fake effects. The old `Weather.hs`, `Weather/*`, and
+thin example script are removed. The checklist byte-writing protocol is now the
+hidden core implementation behind the narrowly added public
+`writeFileDurably :: FilePath -> ByteString -> IO ()`; the weather wrapper only
+UTF-8 encodes rendered output and returns its path. Verification includes the
+full CI commands, strict warning-only compilation of both entrypoints, and loading
+the named runnable module from an unrelated working directory.
+
 ## Final review and PR handoff
 
 Verify the original checkout index and pending files remain untouched. Record test results and any limitations in the PR body. Push only `feat/weather-workflow-mvp` using GitHub CLI authentication, then create a PR with `gh pr create --base main --head feat/weather-workflow-mvp`; never push directly to main or merge. Include the spec and plan links, dependency pin, core and weather checks, durability limitations, and a statement that no live forecast smoke test was run. The user requested execution and a PR, so do not pause for another execution-choice prompt.

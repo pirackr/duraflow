@@ -1,6 +1,6 @@
 # Weather workflow example
 
-`WeatherWorkflow.example.hs` is a runnable `Main` script. It delegates CLI
+`WeatherWorkflow.hs` is a runnable `Main` script. It delegates CLI
 handling to `Weather.Cli`; `Weather` owns the application types, Open-Meteo
 client, deterministic advice, durable checklist writer, and three-task
 orchestration. This directory is application code rather than a Cabal package,
@@ -33,7 +33,7 @@ mkdir -m 700 -p "$HOME/.local/state/duraflow-weather" "$HOME/weather-reports"
 nix develop --no-write-lock-file --command \
   stack runghc --package duraflow --package aeson --package http-client \
   --package http-client-tls --package time -- \
-  -iworkflows workflows/WeatherWorkflow.example.hs \
+  --ghc-arg=-iworkflows --ghc-arg=-main-is --ghc-arg=WeatherWorkflow.main workflows/WeatherWorkflow.hs \
   "$HOME/.local/state/duraflow-weather" weather-home-001 \
   47.6062 -122.3321 2026-09-15 "$HOME/weather-reports/preparation.txt"
 ```

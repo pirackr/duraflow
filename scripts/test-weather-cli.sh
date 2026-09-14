@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 stack_yaml="$repository_root/stack.yaml"
-example="$repository_root/workflows/WeatherWorkflow.example.hs"
+example="$repository_root/workflows/WeatherWorkflow.hs"
 weather_modules="-i$repository_root/workflows"
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
@@ -47,7 +47,7 @@ run_invalid() {
       --package http-client \
       --package http-client-tls \
       --package time \
-      -- "$weather_modules" "$example" "$@"
+      -- --ghc-arg="$weather_modules" --ghc-arg=-main-is --ghc-arg=WeatherWorkflow.main "$example" "$@"
   ) >"$stdout_file" 2>"$stderr_file"; then
     echo "$label unexpectedly succeeded" >&2
     exit 1

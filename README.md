@@ -41,7 +41,7 @@ mkdir -m 700 -p "$HOME/.local/state/duraflow-weather" "$HOME/weather-reports"
 nix develop --no-write-lock-file --command \
   stack runghc --package duraflow --package aeson --package http-client \
   --package http-client-tls --package time -- \
-  -iworkflows workflows/WeatherWorkflow.example.hs \
+  --ghc-arg=-iworkflows --ghc-arg=-main-is --ghc-arg=WeatherWorkflow.main workflows/WeatherWorkflow.hs \
   "$HOME/.local/state/duraflow-weather" weather-home-001 \
   47.6062 -122.3321 2026-09-15 "$HOME/weather-reports/preparation.txt"
 ```
