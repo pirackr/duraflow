@@ -1,0 +1,16 @@
+Weather preparation checklist
+Forecast date (iso8601): 2026-09-15
+Requested coordinates: latitude 47.6062, longitude -122.3321
+Provider coordinates: latitude 47.625, longitude -122.375
+Provider: Open-Meteo
+Retrieved at: 2026-09-14T12:34:56Z
+Minimum temperature: 5.0 °C
+Maximum temperature: 17.5 °C
+Rain probability: 60.0 %
+Maximum wind speed: 41.0 km/h
+Maximum UV index: 3.2
+Preparation:
+- Bring rain protection.
+- Bring warm layers.
+- Secure loose outdoor items and prepare for wind.
+- Use sun protection.
