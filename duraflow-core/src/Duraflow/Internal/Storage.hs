@@ -116,13 +116,13 @@ commitSnapshot Store {storeOperations, storeRunConfig = config, storeSnapshotPat
     throwIO (InvalidState eid "snapshot execution ID does not match its store")
   (temporaryPath, descriptor) <- storageIO eid "create temporary snapshot" (createTemporary config)
   let removeTemporary = ignoreIOException (removeFile temporaryPath)
-      writeAndClose =
-        (do
-          storageIO eid "write temporary snapshot" (storageWrite storeOperations temporaryPath descriptor bytes)
-          storageIO eid "synchronize temporary snapshot" (storageFileSync storeOperations temporaryPath descriptor)
-        ) `finally` storageIO eid "close temporary snapshot" (closeFd descriptor)
+      quietClose = ignoreIOException (closeFd descriptor)
+      writeAndSync = do
+        storageIO eid "write temporary snapshot" (storageWrite storeOperations temporaryPath descriptor bytes)
+        storageIO eid "synchronize temporary snapshot" (storageFileSync storeOperations temporaryPath descriptor)
       transition = do
-        writeAndClose
+        writeAndSync `onException` quietClose
+        storageIO eid "close temporary snapshot" (closeFd descriptor)
         storageIO eid "replace snapshot" (storageReplace storeOperations temporaryPath storeSnapshotPath)
         storageIO eid "synchronize snapshot directory" (storageDirectorySync storeOperations (stateDirectory config))
   transition `onException` removeTemporary
