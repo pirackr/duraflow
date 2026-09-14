@@ -9,6 +9,7 @@ import Data.Aeson (Value (String))
 import qualified Data.ByteString as ByteString
 import Data.IORef
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Duraflow.Internal.Snapshot (decodeSnapshot)
 import Duraflow.Internal.Storage
 import Duraflow.Internal.Types
@@ -29,6 +30,7 @@ import System.Posix.Files
   , ownerWriteMode
   , unionFileModes
   )
+import System.Posix.IO (closeFd)
 import TestSupport
 
 data Event = Write | FileSync | Replace | DirectorySync deriving (Eq, Show)
@@ -39,6 +41,7 @@ storageTests = do
   runCase "commit, read, recover, and ignore leftovers" testBasicStorage
   runCase "storage transition ordering" testTransitionOrdering
   runCase "pre-replacement failures preserve old snapshot" testPreReplacementFailures
+  runCase "primary write and sync failures survive close failure" testPrimaryFailurePrecedence
   runCase "post-replacement failure leaves new snapshot visible" testPostReplacementFailure
   runCase "recovery barriers report failures" testRecoveryFailures
   runCase "owner-only files and permanent lock inode" testModesAndPermanentLock
@@ -98,6 +101,44 @@ testPreReplacementFailures =
         Nothing -> pure ()
         Just path -> assertEqual "operation temporary cleaned" False =<< doesPathExist path
       when (failure == FailReplace) $ assertEqual "old complete snapshot visible before replacement" True =<< readIORef replacementObservedOld
+
+testPrimaryFailurePrecedence :: IO ()
+testPrimaryFailurePrecedence =
+  forM_ [("write", True), ("synchronize", False)] $ \(operation, failDuringWrite) ->
+    withTestDirectory ("primary-" <> operation) $ \directory -> do
+      let config = testConfig directory
+          oldState = snapshot "old"
+          newState = snapshot "new"
+          distinctive = operation <> " failed after closing descriptor"
+      withExecutionStore productionStorageOps config $ \store -> commitSnapshot store oldState
+      temporaryPath <- newIORef Nothing
+      let base = productionStorageOps
+          closeAndFail path descriptor = do
+            writeIORef temporaryPath (Just path)
+            closeFd descriptor
+            ioError (userError distinctive)
+          operations
+            | failDuringWrite = base
+                { storageWrite = \path descriptor _ -> closeAndFail path descriptor
+                }
+            | otherwise = base
+                { storageWrite = \path descriptor bytes -> do
+                    writeIORef temporaryPath (Just path)
+                    storageWrite base path descriptor bytes
+                , storageFileSync = closeAndFail
+                }
+      result <- try (withExecutionStore operations config $ \store -> commitSnapshot store newState)
+      case result of
+        Left (StorageFailure _ message) -> do
+          assertBool "primary operation context retained" (Text.pack operation `Text.isPrefixOf` message)
+          assertBool "distinctive primary failure retained" (Text.pack distinctive `Text.isInfixOf` message)
+          assertBool "secondary close failure omitted" (not ("close temporary snapshot" `Text.isInfixOf` message))
+        Left other -> assertBool ("expected StorageFailure, got " <> show other) False
+        Right () -> assertBool "double failure unexpectedly succeeded" False
+      withExecutionStore productionStorageOps config $ \store ->
+        assertEqual "old snapshot survives double failure" (Just oldState) =<< readSnapshot store
+      path <- maybe (throwIO (userError "temporary path was not captured")) pure =<< readIORef temporaryPath
+      assertEqual "double failure temporary cleaned" False =<< doesPathExist path
 
 testPostReplacementFailure :: IO ()
 testPostReplacementFailure = withTestDirectory "post-replace" $ \directory -> do
