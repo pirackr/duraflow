@@ -1,13 +1,14 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module ProcessTests
   ( childMain
   , processTests
   ) where
 
-import Control.Concurrent (MVar, forkIO, newEmptyMVar, putMVar, takeMVar, throwTo)
-import Control.Exception (AsyncException (ThreadKilled), SomeException, displayException, fromException, throwIO, try)
+import Control.Concurrent (MVar, forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay, throwTo)
+import Control.Exception (AsyncException (ThreadKilled), SomeException, bracket, catch, displayException, fromException, onException, throwIO, try)
 import Control.Monad (forM_, when)
 import Data.Aeson (ToJSON (toJSON), Value (Null))
 import qualified Data.ByteString as ByteString
@@ -21,23 +22,27 @@ import Duraflow.Internal.Types (Snapshot (..), TaskRecord (..), TaskStatus (..))
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import System.IO (BufferMode (LineBuffering), Handle, hFlush, hGetLine, hPutStrLn, hSetBuffering, stdout)
+import System.IO (BufferMode (LineBuffering), Handle, hClose, hFlush, hGetLine, hPutStrLn, hSetBuffering, stdout)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process
   ( CreateProcess (std_in, std_out)
   , ProcessHandle
   , StdStream (CreatePipe)
   , createProcess
+  , getPid
+  , getProcessExitCode
   , proc
   , terminateProcess
   , waitForProcess
   )
+import System.Posix.Signals (Handler (Ignore), installHandler, sigKILL, sigTERM, signalProcess)
 import TestSupport
 
 processTests :: IO ()
 processTests = do
   runCase "process locks reject same ID before serializing workflow input" testProcessLocks
   runCase "killed Running task resumes and keeps complete canonical JSON" testKilledResume
+  runCase "failed child callbacks terminate and reap children" testChildCleanup
   runCase "workflow input serialization remains cancellable and releases lock" testSerializationCancellation
   runCase "asynchronous cancellation releases lock and is not saved Failed" testCancellation
   runCase "injected Running commits gate actions at every phase" testRunningCommitFailures
@@ -63,6 +68,11 @@ childMain [mode, directory, identifier] = do
         Left ExecutionBusy {} -> putStrLn "BUSY"
         Left errorValue -> throwIO (errorValue :: DuraflowError)
         Right () -> putStrLn "DONE"
+    "term-resistant" -> do
+      _ <- installHandler sigTERM Ignore Nothing
+      putStrLn "ACTION_STARTED"
+      _ <- getLine
+      putStrLn "DONE"
     "kill-run" -> do
       let effects = directory </> "effects.log"
       _ <- runWorkflow config () $ \() -> do
@@ -77,37 +87,38 @@ childMain [mode, directory, identifier] = do
 childMain _ = fail "invalid child arguments"
 
 testProcessLocks :: IO ()
-testProcessLocks = withTestDirectory "process-locks" $ \directory -> do
-  holder <- spawnChild "hold" directory "shared"
-  assertEqual "holder handshake" "ACTION_STARTED" =<< childLine holder
-  contender <- spawnChild "attempt" directory "shared"
-  assertEqual "same execution reports busy" "BUSY" =<< childLine contender
-  assertEqual "busy child exits" ExitSuccess =<< childExit contender
-  actions <- newIORef (0 :: Int)
-  let sharedConfig = RunConfig directory (ExecutionId "shared") "process-workflow" "1"
-  encodedContender <- try $
-    runWorkflow sharedConfig ThrowingWorkflowInput $ \_ ->
-      task (TaskId "must-not-run") () (\() -> modifyIORef' actions (+ 1))
-  case (encodedContender :: Either SomeException ()) of
-    Left exception -> case fromException exception of
-      Just ExecutionBusy {} -> pure ()
-      _ -> assertBool ("held-lock contender evaluated workflow input: " <> displayException exception) False
-    Right () -> assertBool "held-lock contender unexpectedly succeeded" False
-  assertEqual "held-lock contender action count" 0 =<< readIORef actions
-  independent <- spawnChild "attempt" directory "independent"
-  assertEqual "different execution action starts" "ACTION_STARTED" =<< childLine independent
-  assertEqual "different execution completes" "DONE" =<< childLine independent
-  assertEqual "independent child exits" ExitSuccess =<< childExit independent
-  continueChild holder
-  assertEqual "holder completes" "DONE" =<< childLine holder
-  assertEqual "holder exits" ExitSuccess =<< childExit holder
+testProcessLocks = withTestDirectory "process-locks" $ \directory ->
+  withChild "hold" directory "shared" $ \holder -> do
+    assertEqual "holder handshake" "ACTION_STARTED" =<< childLine holder
+    withChild "attempt" directory "shared" $ \contender -> do
+      assertEqual "same execution reports busy" "BUSY" =<< childLine contender
+      assertEqual "busy child exits" ExitSuccess =<< childExit contender
+    actions <- newIORef (0 :: Int)
+    let sharedConfig = RunConfig directory (ExecutionId "shared") "process-workflow" "1"
+    encodedContender <- try $
+      runWorkflow sharedConfig ThrowingWorkflowInput $ \_ ->
+        task (TaskId "must-not-run") () (\() -> modifyIORef' actions (+ 1))
+    case (encodedContender :: Either SomeException ()) of
+      Left exception -> case fromException exception of
+        Just ExecutionBusy {} -> pure ()
+        _ -> assertBool ("held-lock contender evaluated workflow input: " <> displayException exception) False
+      Right () -> assertBool "held-lock contender unexpectedly succeeded" False
+    assertEqual "held-lock contender action count" 0 =<< readIORef actions
+    withChild "attempt" directory "independent" $ \independent -> do
+      assertEqual "different execution action starts" "ACTION_STARTED" =<< childLine independent
+      assertEqual "different execution completes" "DONE" =<< childLine independent
+      assertEqual "independent child exits" ExitSuccess =<< childExit independent
+    continueChild holder
+    assertEqual "holder completes" "DONE" =<< childLine holder
+    assertEqual "holder exits" ExitSuccess =<< childExit holder
 
 testKilledResume :: IO ()
 testKilledResume = withTestDirectory "process-kill" $ \directory -> do
-  child <- spawnChild "kill-run" directory "killed"
-  assertEqual "kill handshake after Running commit" "ACTION_STARTED" =<< childLine child
-  terminateProcess (childProcess child)
-  _ <- childExit child
+  withChild "kill-run" directory "killed" $ \child -> do
+    assertEqual "kill handshake after Running commit" "ACTION_STARTED" =<< childLine child
+    terminateProcess (childProcess child)
+    _ <- childExit child
+    pure ()
   bytes <- ByteString.readFile (directory </> "killed.json")
   snapshot <- case decodeSnapshot bytes of
     Left message -> throwIO (userError (Text.unpack message))
@@ -119,6 +130,20 @@ testKilledResume = withTestDirectory "process-kill" $ \directory -> do
     _ <- task (TaskId "one") () (\() -> appendFile effects "one\n")
     task (TaskId "two") () (\() -> appendFile effects "two\n")
   assertEqual "completed task skipped and Running task repeated" ["one", "two", "two"] . lines =<< readFile effects
+
+testChildCleanup :: IO ()
+testChildCleanup = withTestDirectory "child-cleanup" $ \directory -> do
+  observed <- newIORef Nothing
+  result <- try $
+    withChild "term-resistant" directory "probe" $ \child -> do
+      writeIORef observed (Just (childProcess child))
+      assertEqual "TERM-resistant child handshake" "ACTION_STARTED" =<< childLine child
+      throwIO (userError "intentional callback failure")
+  case (result :: Either SomeException ()) of
+    Left _ -> pure ()
+    Right () -> assertBool "cleanup probe callback unexpectedly succeeded" False
+  processHandle <- maybe (throwIO (userError "cleanup probe did not capture child")) pure =<< readIORef observed
+  assertBool "failed callback child was reaped" . maybe False (const True) =<< getProcessExitCode processHandle
 
 testSerializationCancellation :: IO ()
 testSerializationCancellation = withTestDirectory "serialization-cancel" $ \directory -> do
@@ -133,13 +158,13 @@ testSerializationCancellation = withTestDirectory "serialization-cancel" $ \dire
     result <- try (runWorkflow config input flow) :: IO (Either SomeException ())
     putMVar finished result
   within "workflow input serialization starts" (takeMVar started)
-  contender <- spawnChild "attempt" directory "serialization-cancelled"
-  assertEqual "serialization holds execution lock" "BUSY" =<< childLine contender
-  assertEqual "serialization contender exits" ExitSuccess =<< childExit contender
+  withChild "attempt" directory "serialization-cancelled" $ \contender -> do
+    assertEqual "serialization holds execution lock" "BUSY" =<< childLine contender
+    assertEqual "serialization contender exits" ExitSuccess =<< childExit contender
   within "serialization cancellation delivery" (throwTo thread ThreadKilled)
   result <- within "cancelled serialization exits" (takeMVar finished)
   case result of
-    Left exception -> assertBool "serialization propagates ThreadKilled" (show exception == "thread killed")
+    Left exception -> assertBool "serialization propagates ThreadKilled" (fromException exception == Just ThreadKilled)
     Right () -> assertBool "cancelled serialization unexpectedly succeeded" False
   assertEqual "action does not run during input serialization" 0 =<< readIORef actions
   _ <- runWorkflow config () (\() -> task (TaskId "after-cancel") () (\() -> modifyIORef' actions (+ 1)))
@@ -176,7 +201,7 @@ testCancellation = withTestDirectory "runtime-cancel" $ \directory -> do
   within "cancel exception delivery" (throwTo thread ThreadKilled)
   result <- within "cancel invocation exits" (takeMVar finished)
   case result of
-    Left exception -> assertBool "ThreadKilled propagates" (show exception == "thread killed")
+    Left exception -> assertBool "ThreadKilled propagates" (fromException exception == Just ThreadKilled)
     Right () -> assertBool "cancellation unexpectedly succeeded" False
   snapshot <- readRuntimeSnapshot directory "cancelled"
   assertEqual "cancellation remains Running" [Running] (map recordStatus (snapshotTasks snapshot))
@@ -258,14 +283,44 @@ data Child = Child
   , childProcess :: ProcessHandle
   }
 
+withChild :: String -> FilePath -> String -> (Child -> IO a) -> IO a
+withChild mode directory identifier = bracket acquire cleanupChild
+ where
+  acquire = spawnChild mode directory identifier
+
 spawnChild :: String -> FilePath -> String -> IO Child
 spawnChild mode directory identifier = do
   executable <- getExecutablePath
   (Just inputHandle, Just outputHandle, _, processHandle) <-
     createProcess (proc executable ["--child", mode, directory, identifier])
       {std_in = CreatePipe, std_out = CreatePipe}
-  hSetBuffering inputHandle LineBuffering
-  pure Child {childInput = inputHandle, childOutput = outputHandle, childProcess = processHandle}
+  let child = Child {childInput = inputHandle, childOutput = outputHandle, childProcess = processHandle}
+  (hSetBuffering inputHandle LineBuffering >> pure child) `onException` cleanupChild child
+
+cleanupChild :: Child -> IO ()
+cleanupChild child = do
+  running <- getProcessExitCode (childProcess child)
+  case running of
+    Just _ -> pure ()
+    Nothing -> do
+      ignoreIO (terminateProcess (childProcess child))
+      terminated <- awaitExit 50
+      when (not terminated) $ do
+        processId <- getPid (childProcess child)
+        maybe (pure ()) (ignoreIO . signalProcess sigKILL) processId
+        _ <- awaitExit 50
+        pure ()
+  ignoreIO (hClose (childInput child))
+  ignoreIO (hClose (childOutput child))
+ where
+  ignoreIO action = action `catch` \(_ :: SomeException) -> pure ()
+  awaitExit :: Int -> IO Bool
+  awaitExit 0 = pure False
+  awaitExit attempts = do
+    exited <- getProcessExitCode (childProcess child)
+    case exited of
+      Just _ -> pure True
+      Nothing -> threadDelay 10000 >> awaitExit (attempts - 1)
 
 childLine :: Child -> IO String
 childLine child = within "child output" (hGetLine (childOutput child))
