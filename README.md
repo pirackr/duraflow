@@ -1,8 +1,9 @@
 # Duraflow v2
 
-Haskell project setup only. The library is empty and the executable/test
-entrypoints are placeholders. No scheduler, worker, persistence, or pi
-integration is implemented. The Python demo has been removed.
+Haskell workspace setup only. The workspace contains an empty library scaffold
+and a non-runnable illustrative weather workflow sketch. No scheduler, worker,
+persistence, orchestrator, or pi integration is implemented. The Python demo
+has been removed.
 
 ## Development
 
@@ -25,7 +26,7 @@ Inside either shell:
 stack build
 stack test
 stack ghci duraflow:lib
-fourmolu --mode inplace src/Duraflow.hs app/Main.hs test/Main.hs
+fourmolu --mode inplace duraflow-core/src/Duraflow.hs duraflow-core/test/Main.hs
 ```
 
 `stack.yaml` uses a compiler-only resolver because the scaffold depends only
@@ -40,17 +41,24 @@ the compiler version in `stack.yaml` aligned with the new shell's GHC.
 ## Layout
 
 ```text
-app/Main.hs        empty executable entrypoint
-src/Duraflow.hs     empty public library module
-test/Main.hs       empty test entrypoint
-duraflow.cabal     package/component definitions
-stack.yaml        Stack workspace and compiler configuration
-flake.nix         flake development shell
-flake.lock        pinned nixpkgs
-shell.nix         legacy development shell using the same pin
-nix/dev-shell.nix  shared development tools
+duraflow-core/duraflow.cabal              library and test definitions
+duraflow-core/src/Duraflow.hs             empty public library module
+duraflow-core/test/Main.hs                placeholder test entrypoint
+duraflow-core/README.md                   core package boundary and status
+workflows/WeatherWorkflow.example.hs      non-runnable illustrative API sketch
+workflows/README.md                       workflow example boundary and status
+stack.yaml                                Stack workspace and compiler configuration
+flake.nix                                 flake development shell
+flake.lock                                pinned nixpkgs
+shell.nix                                 legacy development shell using the same pin
+nix/dev-shell.nix                         shared development tools
 ```
 
-The Nix setup provides a development shell only; package derivations and
-application features can be added later. No project license has been chosen
-(`license: NONE` in Cabal).
+See [`duraflow-core/README.md`](duraflow-core/README.md) for the library
+boundary and [`workflows/README.md`](workflows/README.md) for the example
+boundary. Workflows are not discovered or registered by the core.
+
+Future loop, ticket, or orchestrator components can become sibling packages,
+but none are created or implemented now. The Nix setup provides a development
+shell only; package derivations and application features can be added later.
+No project license has been chosen (`license: NONE` in Cabal).

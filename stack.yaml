@@ -3,7 +3,7 @@
 resolver: ghc-9.10.3
 
 packages:
-  - .
+  - duraflow-core
 
 # Nix owns the toolchain; Stack must not download another GHC.
 system-ghc: true

@@ -37,6 +37,7 @@ jobs:
           path: |
             ~/.stack
             .stack-work
+            duraflow-core/.stack-work
           key: stack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/*.nix', 'stack.yaml', 'stack.yaml.lock', '**/*.cabal') }}-${{ hashFiles('**/*.hs') }}
           restore-keys: |
             stack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/*.nix', 'stack.yaml', 'stack.yaml.lock', '**/*.cabal') }}-
