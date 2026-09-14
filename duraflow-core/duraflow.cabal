@@ -3,7 +3,7 @@ name:               duraflow
 version:            0.1.0.0
 synopsis:           Durable local workflows
 category:           System
-description:        Haskell project scaffold for a local durable workflow runner.
+description:        Haskell library scaffold for local durable workflows.
 license:            NONE
 build-type:         Simple
 extra-source-files: README.md
@@ -17,13 +17,6 @@ library
   import:           defaults
   hs-source-dirs:   src
   exposed-modules:  Duraflow
-
-executable duraflow
-  import:           defaults
-  hs-source-dirs:   app
-  main-is:          Main.hs
-  ghc-options:      -threaded -rtsopts
-  build-depends:    duraflow
 
 test-suite duraflow-test
   import:           defaults
