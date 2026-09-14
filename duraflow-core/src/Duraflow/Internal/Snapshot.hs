@@ -128,7 +128,7 @@ validateHistory (record : rest) = case recordStatus record of
   Running -> requireEnd rest
   Failed _ -> requireEnd rest
  where
-  requireEnd rest = unless (null rest) $
+  requireEnd remaining = unless (null remaining) $
     Left "snapshot contains a record after an unfinished task"
 
 isSuccess :: TaskStatus -> Bool
