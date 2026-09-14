@@ -110,16 +110,19 @@ validateSnapshot snapshot = do
       , workflowVersion = snapshotWorkflowVersion snapshot
       }
   traverse_ (validateTaskId . recordTaskId) records
-  if length taskIds == length (nub taskIds)
-    then Right ()
-    else Left "snapshot contains duplicate task IDs"
+  require (length taskIds == length (nub taskIds)) "snapshot contains duplicate task IDs"
   validateHistory records
-  if snapshotCompleted snapshot && any (not . isSuccess . recordStatus) records
-    then Left "completed snapshot contains an unfinished task"
-    else Right ()
+  require
+    (not (snapshotCompleted snapshot) || all (isSuccess . recordStatus) records)
+    "completed snapshot contains an unfinished task"
  where
   records = snapshotTasks snapshot
   taskIds = map recordTaskId records
+
+require :: Bool -> Text -> Either Text ()
+require condition message
+  | condition = Right ()
+  | otherwise = Left message
 
 validateHistory :: [TaskRecord] -> Either Text ()
 validateHistory [] = Right ()

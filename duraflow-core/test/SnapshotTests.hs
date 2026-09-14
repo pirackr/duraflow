@@ -36,24 +36,30 @@ testRoundTrip = do
 testRunConfigValidation :: IO ()
 testRunConfigValidation = do
   let cfg eid name version = RunConfig "/existing" (ExecutionId eid) name version
-  assertLeft "empty execution id" (validateRunConfig (cfg "" "w" "1"))
-  assertLeft "129-character execution id" (validateRunConfig (cfg (Text.replicate 129 "a") "w" "1"))
-  assertLeft "non-ASCII execution id" (validateRunConfig (cfg "é" "w" "1"))
-  assertLeft "path execution id" (validateRunConfig (cfg "../escape" "w" "1"))
-  assertLeft "punctuation first" (validateRunConfig (cfg "_name" "w" "1"))
-  assertEqual "one-character execution id" (Right ()) (validateRunConfig (cfg "a" "w" "1"))
-  assertEqual "128-character execution id" (Right ()) (validateRunConfig (cfg (Text.replicate 128 "z") "w" "1"))
-  assertEqual "valid punctuation" (Right ()) (validateRunConfig (cfg "A0._-z" "w" "1"))
-  assertLeft "blank workflow name" (validateRunConfig (cfg "id" " \t\n" "1"))
-  assertLeft "blank workflow version" (validateRunConfig (cfg "id" "w" " \t"))
-  assertEqual "untrimmed workflow metadata" (Right ()) (validateRunConfig (cfg "id" " w " " 1 "))
+      invalidConfigs =
+        [ ("empty execution id", cfg "" "w" "1")
+        , ("129-character execution id", cfg (Text.replicate 129 "a") "w" "1")
+        , ("non-ASCII execution id", cfg "é" "w" "1")
+        , ("path execution id", cfg "../escape" "w" "1")
+        , ("punctuation first", cfg "_name" "w" "1")
+        , ("blank workflow name", cfg "id" " \t\n" "1")
+        , ("blank workflow version", cfg "id" "w" " \t")
+        ]
+      validConfigs =
+        [ ("one-character execution id", cfg "a" "w" "1")
+        , ("128-character execution id", cfg (Text.replicate 128 "z") "w" "1")
+        , ("valid punctuation", cfg "A0._-z" "w" "1")
+        , ("untrimmed workflow metadata", cfg "id" " w " " 1 ")
+        ]
+  mapM_ (\(label, config) -> assertLeft label (validateRunConfig config)) invalidConfigs
+  mapM_ (\(label, config) -> assertEqual label (Right ()) (validateRunConfig config)) validConfigs
 
 testTaskIdValidation :: IO ()
 testTaskIdValidation = do
-  assertLeft "empty task id" (validateTaskId (TaskId ""))
-  assertLeft "blank task id" (validateTaskId (TaskId " \t\n"))
-  assertEqual "non-ASCII task id" (Right ()) (validateTaskId (TaskId "préparer"))
-  assertEqual "untrimmed task id" (Right ()) (validateTaskId (TaskId " task "))
+  let invalidIds = [("empty task id", ""), ("blank task id", " \t\n")]
+      validIds = [("non-ASCII task id", "préparer"), ("untrimmed task id", " task ")]
+  mapM_ (\(label, value) -> assertLeft label (validateTaskId (TaskId value))) invalidIds
+  mapM_ (\(label, value) -> assertEqual label (Right ()) (validateTaskId (TaskId value))) validIds
 
 testStrictSnapshotFields :: IO ()
 testStrictSnapshotFields = do
@@ -80,7 +86,7 @@ testSnapshotFieldTypes = do
     ]
   -- Application-owned JSON has no shape restriction.
   let opaque = replaceField "workflowInput" (toJSON ([Null, object ["x" .= True]])) validSnapshotValue
-  assertEqual "opaque workflow input" False (either (const True) (const False) (decodeValue opaque))
+  assertRight "opaque workflow input" (decodeValue opaque)
 
 testTaskSchemas :: IO ()
 testTaskSchemas = do
@@ -102,8 +108,8 @@ testTaskSchemas = do
     , ("error type", replaceField "error" Null failedRecord)
     , ("error over limit", replaceField "error" (String (Text.replicate 2049 "x")) failedRecord)
     ]
-  assertEqual "2048-character error accepted" False
-    (either (const True) (const False) (decodeRecord (replaceField "error" (String (Text.replicate 2048 "x")) failedRecord)))
+  assertRight "2048-character error accepted"
+    (decodeRecord (replaceField "error" (String (Text.replicate 2048 "x")) failedRecord))
   mapM_ (uncurry assertRecordStatus)
     [ (Running, runningRecord)
     , (Success (object ["result" .= (3 :: Int)]), successRecord)
@@ -122,8 +128,8 @@ testInvalidHistories = do
   rejectTasks "unfinished middle" [successRecord, withTaskId "middle" runningRecord, withTaskId "later" successRecord]
   reject "completed running history" (replaceField "completed" (Bool True) (withTasks [runningRecord]))
   reject "completed failed history" (replaceField "completed" (Bool True) (withTasks [failedRecord]))
-  assertEqual "completed successful history" False
-    (either (const True) (const False) (decodeValue (replaceField "completed" (Bool True) (withTasks [successRecord]))))
+  assertRight "completed successful history"
+    (decodeValue (replaceField "completed" (Bool True) (withTasks [successRecord])))
 
 snapshotKeys :: [Text.Text]
 snapshotKeys = ["schemaVersion", "executionId", "workflowName", "workflowVersion", "workflowInput", "completed", "tasks"]

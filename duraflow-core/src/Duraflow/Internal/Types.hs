@@ -75,12 +75,12 @@ validateTaskId (TaskId value) = validateNonblank "task ID" value
 
 validateExecutionId :: ExecutionId -> Either Text ()
 validateExecutionId (ExecutionId value)
-  | Text.null value = Left "execution ID must contain between 1 and 128 characters"
-  | Text.length value > 128 = Left "execution ID must contain between 1 and 128 characters"
+  | lengthValue < 1 || lengthValue > 128 = Left "execution ID must contain between 1 and 128 characters"
   | not (asciiAlphaNumeric (Text.head value)) = Left "execution ID must start with an ASCII letter or digit"
   | not (Text.all validRemainder value) = Left "execution ID contains an invalid character"
   | otherwise = Right ()
  where
+  lengthValue = Text.length value
   asciiAlphaNumeric character = isAscii character && isAlphaNum character
   validRemainder character = asciiAlphaNumeric character || character `elem` ("._-" :: String)
 

@@ -173,7 +173,7 @@ replayOrRetry environment restore state taskId encodedInput input action record 
     commitSnapshot (runtimeStore environment) runningSnapshot
     let runningState = state {currentSnapshot = runningSnapshot}
     writeIORef (runtimeState environment) runningState
-    runTaskAction environment restore runningState taskId input action
+    runTaskAction environment restore runningState taskId encodedInput input action
 
 appendAndRun
   :: (ToJSON input, ToJSON output)
@@ -196,7 +196,7 @@ appendAndRun environment restore state taskId encodedInput input action = do
   commitSnapshot (runtimeStore environment) runningSnapshot
   let runningState = state {currentSnapshot = runningSnapshot}
   writeIORef (runtimeState environment) runningState
-  runTaskAction environment restore runningState taskId input action
+  runTaskAction environment restore runningState taskId encodedInput input action
 
 runTaskAction
   :: ToJSON output
@@ -204,16 +204,17 @@ runTaskAction
   -> (forall value. IO value -> IO value)
   -> RuntimeState
   -> TaskId
+  -> Value
   -> input
   -> (input -> IO output)
   -> IO output
-runTaskAction environment restore state taskId input action = do
+runTaskAction environment restore state taskId encodedInput input action = do
   attempted <- try (restore performAndEncode)
   case attempted of
     Left exception -> handleActionException exception
     Right (output, encodedOutput) -> do
       let position = historyCursor state
-          successful = TaskRecord taskId (recordInputAt position state) (Success encodedOutput)
+          successful = TaskRecord taskId encodedInput (Success encodedOutput)
           successfulSnapshot = replaceRecord position successful (currentSnapshot state)
       commitSnapshot (runtimeStore environment) successfulSnapshot
       writeIORef (runtimeState environment) state
@@ -232,7 +233,7 @@ runTaskAction environment restore state taskId input action = do
       let position = historyCursor state
           eid = snapshotExecutionId (currentSnapshot state)
           diagnostic = Text.take 2048 (Text.pack (displayException exception))
-          failed = TaskRecord taskId (recordInputAt position state) (Failed diagnostic)
+          failed = TaskRecord taskId encodedInput (Failed diagnostic)
           failedSnapshot = replaceRecord position failed (currentSnapshot state)
           preserveContext (StorageFailure failedEid message) =
             throwIO (StorageFailure failedEid (message <> "; while recording task failure: " <> diagnostic))
@@ -276,9 +277,6 @@ inputEncodingFailure eid position taskId exception =
   case fromException exception :: Maybe SomeAsyncException of
     Just _ -> throwIO exception
     Nothing -> throwIO (ReplayMismatch eid position (Just taskId) ("task input cannot be encoded: " <> Text.pack (displayException exception)))
-
-recordInputAt :: Int -> RuntimeState -> Value
-recordInputAt position state = recordInput (snapshotTasks (currentSnapshot state) !! position)
 
 replaceRecord :: Int -> TaskRecord -> Snapshot -> Snapshot
 replaceRecord position replacement snapshot =

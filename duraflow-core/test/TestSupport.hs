@@ -2,6 +2,7 @@ module TestSupport
   ( assertBool
   , assertEqual
   , assertLeft
+  , assertRight
   , assertThrows
   , runCase
   , within
@@ -31,6 +32,11 @@ assertLeft :: Show b => String -> Either a b -> IO ()
 assertLeft name result = case result of
   Left _ -> pure ()
   Right actual -> throwIO (TestFailure (name <> ": expected Left, actual Right " <> show actual))
+
+assertRight :: Show a => String -> Either a b -> IO ()
+assertRight name result = case result of
+  Left actual -> throwIO (TestFailure (name <> ": expected Right, actual Left " <> show actual))
+  Right _ -> pure ()
 
 assertThrows :: String -> IO a -> IO ()
 assertThrows name action = do
