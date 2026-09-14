@@ -1,19 +1,100 @@
-# Workflow examples
+# Weather workflow example
 
-`WeatherWorkflow.example.hs` is an illustrative API sketch, not runnable
-code. The proposed Duraflow API and its application-specific Weather
-module do not exist yet. This directory is not a Cabal package and is not
-included in the library build.
+`WeatherWorkflow.example.hs` is a runnable `Main` script. It delegates CLI
+handling to `Weather.Cli`; `Weather` owns the application types, Open-Meteo
+client, deterministic advice, durable checklist writer, and three-task
+orchestration. This directory is application code rather than a Cabal package,
+and the core does not know it exists.
 
-Workflows can live in any directory or repository. This directory is only
-a convenient home for examples; the core does not scan it or maintain a
-central workflow registry.
+## Command
 
-During development, project-aware `stack runghc` can use a built local
-library. Standalone `stack script` ignores project-level `stack.yaml`, so
-it needs its own compatible snapshot and a resolvable, pinned Duraflow
-dependency. Neither command makes this unfinished sketch runnable.
+There are exactly six positional arguments and no defaults:
 
-Execution state is separate from workflow source location. A future
-runtime must support an explicit state location; moving a script alone
-must not change which execution it resumes.
+```text
+STATE_DIR EXECUTION_ID LATITUDE LONGITUDE YYYY-MM-DD OUTPUT_FILE
+```
+
+- `STATE_DIR`: existing, private execution-state directory
+- `EXECUTION_ID`: valid Duraflow execution filename component
+- `LATITUDE`: finite value from -90 through 90
+- `LONGITUDE`: finite value from -180 through 180
+- `YYYY-MM-DD`: valid canonical ISO calendar date
+- `OUTPUT_FILE`: checklist path whose parent already exists
+
+The output is normalized to an absolute path and must be outside the canonical
+state directory. Existing symlink and nonregular output entries are rejected,
+including dangling symlinks. Directory aliases do not bypass the state/output
+separation check.
+
+Example:
+
+```sh
+mkdir -m 700 -p "$HOME/.local/state/duraflow-weather" "$HOME/weather-reports"
+nix develop --no-write-lock-file --command \
+  stack runghc --package duraflow --package aeson --package http-client \
+  --package http-client-tls --package time -- \
+  -iworkflows workflows/WeatherWorkflow.example.hs \
+  "$HOME/.local/state/duraflow-weather" weather-home-001 \
+  47.6062 -122.3321 2026-09-15 "$HOME/weather-reports/preparation.txt"
+```
+
+**A fresh fetch requires a date currently served by Open-Meteo; replace the
+illustrative `2026-09-15` date before running.** The live command is for the user
+and is never run by automated tests. Success emits only the absolute output
+path. Failures emit a standard-error diagnostic and exit nonzero.
+
+## Workflow behavior
+
+The workflow version is explicitly `1` and runs these stable tasks in order:
+
+1. `fetchForecast`
+2. `prepareAdvice`
+3. `writeChecklist`
+
+The forecast request includes coordinates, date, and absolute output path so all
+choices participate in compatibility. Forecast output retains requested and
+provider coordinates, metrics and normalized units, Open-Meteo provenance,
+request URL, and retrieval timestamp. Advice is deterministic and ordered:
+rain protection at 50%, warm layers at 5 °C minimum, wind preparation at 40
+km/h, and sun protection at UV 3. If none applies, one no-additional-preparation
+item is emitted. Checklist text is stable UTF-8 with LF endings and one trailing
+newline.
+
+No task is automatically retried. Rerun the same invocation to resume. Saved
+successful tasks replay without HTTP or clock access, preserving the original
+forecast and retrieval timestamp. Use a new execution ID for a fresh forecast.
+Changing task behavior, orchestration, or JSON meaning requires changing the
+workflow version because JSON instances and versioned state are compatibility
+contracts.
+
+The output writer atomically replaces a complete file rather than appending.
+An effect can finish before its success checkpoint, so replacement may repeat;
+Duraflow provides at-least-once effects in that gap, not exactly once. Once the
+write is committed, replay skips it even if somebody deletes the artifact; a
+missing output remains missing. Different executions do not share an output
+lock, so use separate paths; if paths are shared, last replacement wins.
+
+## Privacy and limitations
+
+State files are plaintext and contain request choices, saved forecasts, and
+possibly failure diagnostics. Provision state and output-parent directories
+before invocation, keep state private, and use owner-controlled permissions.
+The durability contract is limited to Linux on a trusted local filesystem with
+advisory locking, atomic same-directory replacement, and file/directory sync.
+Network filesystems and hostile concurrent changes are unsupported. SIGKILL,
+failure-injection, and test failures do not certify hardware power-loss
+behavior.
+
+## Offline tests
+
+From any working directory, the wrappers locate the repository themselves:
+
+```sh
+nix develop --no-write-lock-file --command bash scripts/test-weather.sh
+nix develop --no-write-lock-file --command bash scripts/test-weather-cli.sh
+```
+
+The first runs fixture, rule, writer, replay, repeated-effect, and CLI unit tests.
+The second launches the example from an unrelated temporary source directory
+with absolute Stack and module paths and verifies validation failures. Neither
+uses credentials nor sends a forecast request.

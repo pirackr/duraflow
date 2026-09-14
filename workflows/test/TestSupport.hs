@@ -7,6 +7,7 @@ module TestSupport
   , assertThrows
   , fixturePath
   , runCase
+  , within
   , withTestDirectory
   ) where
 
@@ -14,6 +15,7 @@ import Control.Exception (Exception, SomeException, bracket, catch, throwIO)
 import Control.Monad (unless)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.IO (hClose, openTempFile)
+import System.Timeout (timeout)
 
 assertBool :: String -> Bool -> IO ()
 assertBool name condition = unless condition (throwIO (TestFailure name))
@@ -41,6 +43,13 @@ runCase name action = do
   putStrLn ("[ RUN      ] " <> name)
   action
   putStrLn ("[       OK ] " <> name)
+
+within :: String -> IO value -> IO value
+within label action = do
+  result <- timeout (10 * 1000 * 1000) action
+  case result of
+    Nothing -> throwIO (TestFailure (label <> " timed out"))
+    Just value -> pure value
 
 withTestDirectory :: String -> (FilePath -> IO a) -> IO a
 withTestDirectory label = bracket acquire removeDirectoryRecursive

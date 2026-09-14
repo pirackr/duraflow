@@ -9,13 +9,12 @@ import Control.Monad (forM_)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
-import Duraflow (ExecutionId (..), RunConfig (..), runWorkflow)
-import System.Directory (createDirectory, createFileLink, doesFileExist, removeFile)
+import System.Directory (createDirectory, createFileLink)
 import System.FilePath ((</>))
 import System.Posix.Files (ownerExecuteMode, ownerReadMode, ownerWriteMode, setFileMode, unionFileModes)
 import TestSupport
@@ -30,7 +29,6 @@ runForecastTests = do
   runCase "forecast rejects invalid coordinates and metrics" valueFailures
   runCase "forecast transport status, deadline, clock, and cancellation" transportFailures
   runCase "checklist writer safely replaces real files" writerCases
-  runCase "three-task workflow resumes offline" workflowResume
 
 request :: WeatherRequest
 request = WeatherRequest 47.6062 (-122.3321) (fromGregorian 2026 9 15) "/tmp/checklist.txt"
@@ -129,13 +127,15 @@ transportFailures = do
   assertThrows "response acquisition deadline" (fetchForecastWith 1000 (\_ -> threadDelay 100000 >> pure (200, bytes)) clock request)
   let huge = replace "\"GMT\"" ("\"" <> ByteString8.replicate 20000000 'x' <> "\"") bytes
   assertThrows "validation deadline" (fetchForecastWith 1000 (\_ -> pure (200, huge)) clock request)
+  started <- newEmptyMVar
+  blocked <- newEmptyMVar
   result <- newEmptyMVar
   thread <- forkIO $ do
-    outcome <- try (fetchForecastWith 10000000 (\_ -> threadDelay 10000000 >> pure (200, bytes)) clock request)
+    outcome <- try (fetchForecastWith 10000000 (\_ -> putMVar started () >> takeMVar blocked) clock request)
     putMVar result (outcome :: Either SomeException Forecast)
-  threadDelay 20000
-  killThread thread
-  cancelled <- takeMVar result
+  within "transport starts" (takeMVar started)
+  within "synchronous cancellation delivery" (killThread thread)
+  cancelled <- within "cancelled transport completes" (takeMVar result)
   assertBool "external cancellation propagated" $ case cancelled of
     Left exception -> fromException exception == Just ThreadKilled
     Right _ -> False
@@ -173,60 +173,6 @@ writerCases = withTestDirectory "writer" $ \directory -> do
     Left _ -> pure ()
     Right _ -> fail "write unexpectedly succeeded in non-writable directory"
   assertEqual "failed write preserved target" "old-complete-content" =<< ByteString.readFile target
-
-workflowResume :: IO ()
-workflowResume = withTestDirectory "resume" $ \directory -> do
-  bytes <- readFixture
-  let output = directory </> "result.txt"
-      workflowRequest = request {outputPath = output}
-      config = RunConfig directory (ExecutionId "offline-resume") weatherWorkflowName weatherWorkflowVersion
-  source <- either (fail . show) pure (parseForecast workflowRequest (forecastUrl workflowRequest) timestamp bytes)
-  fetches <- newIORef (0 :: Int)
-  writes <- newIORef (0 :: Int)
-  let effects = WeatherEffects
-        { getForecast = \_ -> modifyIORef' fetches (+ 1) >> pure source
-        , putChecklist = \input -> do
-            count <- readIORef writes
-            writeIORef writes (count + 1)
-            if count == 0 then fail "injected writer failure" else writeChecklist input
-        }
-  _ <- getForecast effects workflowRequest
-  _ <- getForecast effects workflowRequest
-  assertEqual "fetch spy counts every invocation" 2 =<< readIORef fetches
-  writeIORef fetches 0
-  assertThrows "first workflow fails at writer" (runWorkflow config workflowRequest (weatherPreparationWith effects))
-  assertEqual "one fetch before resume" 1 =<< readIORef fetches
-  result <- runWorkflow config workflowRequest (weatherPreparationWith effects)
-  assertEqual "resume output" output result
-  assertEqual "fetch replayed" 1 =<< readIORef fetches
-  assertEqual "writer retried once" 2 =<< readIORef writes
-  assertEqual "saved timestamp rendered" True . ByteString8.isInfixOf "2026-09-14T12:34:56Z" =<< ByteString.readFile output
-  removeFile output
-  _ <- runWorkflow config workflowRequest (weatherPreparationWith effects)
-  exists <- doesFileExist output
-  assertEqual "committed writer skipped when artifact absent" False exists
-  assertEqual "writer still not rerun" 2 =<< readIORef writes
-
-  let repeatedOutput = directory </> "repeated-effect.txt"
-      repeatedRequest = request {outputPath = repeatedOutput}
-      repeatedConfig = RunConfig directory (ExecutionId "offline-repeated-effect") weatherWorkflowName weatherWorkflowVersion
-      repeatedSource = source {forecastRequest = repeatedRequest}
-  repeatedWrites <- newIORef (0 :: Int)
-  let repeatedEffects = WeatherEffects
-        { getForecast = const (pure repeatedSource)
-        , putChecklist = \input -> do
-            path <- writeChecklist input
-            count <- readIORef repeatedWrites
-            writeIORef repeatedWrites (count + 1)
-            if count == 0 then fail "effect completed before checkpoint failure" else pure path
-        }
-  assertThrows "completed external effect can precede checkpoint failure"
-    (runWorkflow repeatedConfig repeatedRequest (weatherPreparationWith repeatedEffects))
-  firstEffectBytes <- ByteString.readFile repeatedOutput
-  _ <- runWorkflow repeatedConfig repeatedRequest (weatherPreparationWith repeatedEffects)
-  secondEffectBytes <- ByteString.readFile repeatedOutput
-  assertEqual "repeated effect remains one complete checklist" firstEffectBytes secondEffectBytes
-  assertEqual "uncommitted effect repeated once" 2 =<< readIORef repeatedWrites
 
 replaceUtf8 :: Text -> Text -> ByteString.ByteString -> ByteString.ByteString
 replaceUtf8 needle replacement = replace (TextEncoding.encodeUtf8 needle) (TextEncoding.encodeUtf8 replacement)
