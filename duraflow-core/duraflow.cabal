@@ -16,7 +16,11 @@ common defaults
 library
   import:           defaults
   hs-source-dirs:   src
-  exposed-modules:  Duraflow
+  exposed-modules:
+      Duraflow
+    , Duraflow.Internal.Snapshot
+    , Duraflow.Internal.Storage
+    , Duraflow.Internal.Types
   build-depends:
       aeson      ^>=2.2.5.1
     , bytestring ^>=0.12.2.0
@@ -31,6 +35,10 @@ test-suite duraflow-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Main.hs
+  other-modules:
+      SnapshotTests
+    , StorageTests
+    , TestSupport
   build-depends:
       aeson      ^>=2.2.5.1
     , bytestring ^>=0.12.2.0

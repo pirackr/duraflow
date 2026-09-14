@@ -1,5 +1,7 @@
 module Main (main) where
 
--- Placeholder test entry point.
+import SnapshotTests (snapshotTests)
+import StorageTests (storageTests)
+
 main :: IO ()
-main = pure ()
+main = snapshotTests >> storageTests
